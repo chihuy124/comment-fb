@@ -194,9 +194,29 @@ function extractReelId(href) {
   return null;
 }
 
+function humanClick(el) {
+  // React (used by FB) sometimes ignores el.click() and requires the full
+  // pointer/mouse event sequence with real coordinates. Dispatch all four.
+  try {
+    const rect = el.getBoundingClientRect();
+    const cx = rect.left + Math.max(1, rect.width) / 2;
+    const cy = rect.top + Math.max(1, rect.height) / 2;
+    const opts = {
+      bubbles: true, cancelable: true, view: window,
+      clientX: cx, clientY: cy,
+      button: 0, buttons: 1,
+    };
+    el.dispatchEvent(new PointerEvent('pointerdown', { ...opts, pointerType: 'mouse' }));
+    el.dispatchEvent(new MouseEvent('mousedown', opts));
+    el.dispatchEvent(new PointerEvent('pointerup', { ...opts, pointerType: 'mouse' }));
+    el.dispatchEvent(new MouseEvent('mouseup', opts));
+    el.dispatchEvent(new MouseEvent('click', opts));
+  } catch (e) {
+    try { el.click(); } catch (_) {}
+  }
+}
+
 async function openCommentPanel() {
-  // Return true iff we can confirm the comment panel is open by finding
-  // at least one per-comment aria-label node in the DOM.
   const isPanelOpen = () =>
     !!document.querySelector(
       '[aria-label^="Bình luận dưới tên"], [aria-label^="Comment by"], [aria-label^="Bình luận của"]'
@@ -220,25 +240,30 @@ async function openCommentPanel() {
     '[aria-label], div[role="button"], a[role="link"], div[role="link"]'
   ));
 
+  const targets = [];
   for (const el of candidates) {
     const label = (el.getAttribute && el.getAttribute('aria-label') || '').trim();
     const text = (el.innerText || '').trim().slice(0, 60);
-    if (!matches(label) && !matches(text)) continue;
+    if (matches(label) || matches(text)) targets.push({ el, label: label || text });
+  }
+  console.log('[FB Seeding CS] found', targets.length, 'candidate comment buttons');
 
-    // Try clicking the element AND up to 3 ancestors — FB nests the actual
-    // click target inside decorative spans.
-    let target = el;
-    for (let up = 0; up < 4 && target; up++) {
-      try { target.click(); } catch (e) {}
-      target = target.parentElement;
+  for (const { el, label } of targets) {
+    // React handlers might sit on the element itself, its parent, or even
+    // higher — dispatch full mouse sequence on the element and its ancestors.
+    let node = el;
+    for (let up = 0; up < 4 && node; up++) {
+      humanClick(node);
+      node = node.parentElement;
     }
-    console.log('[FB Seeding CS] tried opening panel via:', label || text);
+    console.log('[FB Seeding CS] clicked candidate:', label);
 
-    // Give React up to 3s to render the panel; poll every 500ms
-    for (let wait = 0; wait < 6; wait++) {
+    // Poll for panel to open — up to 6s (hidden tabs load slower under
+    // Chrome's background throttling).
+    for (let wait = 0; wait < 12; wait++) {
       await sleep(500);
       if (isPanelOpen()) {
-        console.log('[FB Seeding CS] panel opened after', (wait + 1) * 500, 'ms');
+        console.log('[FB Seeding CS] panel opened after', (wait + 1) * 500, 'ms via', label);
         return true;
       }
     }
