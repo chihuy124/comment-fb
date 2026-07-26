@@ -10,41 +10,10 @@ const STORAGE_KEYS = {
     PROMO_LINK: 'fb_seeding_promo_link_v1'
 };
 
-const DEFAULT_PROMO_LINK = 'https://www.facebook.com/permalink.php?story_fbid=pfbid02MoviePostExample&id=10009999';
+const DEFAULT_PROMO_LINK = '';
 
-// Initial Sample Demo Data
-const INITIAL_SAMPLE_POSTS = [
-    {
-        id: 'post_demo_phim_1',
-        url: 'https://www.facebook.com/permalink.php?story_fbid=pfbid025983711&id=10006489',
-        tag: 'Group Phim / Bài viết đối thủ 01',
-        category: 'PHIM_PROMO',
-        status: 'PENDING',
-        currentComment: 'Đã Cập Nhật Đầy Đủ phim tại đây - còn có nhiều phim hay khác nữa cho bạn nào muốn xem nhiều phim hay 👉🏻\nhttps://www.facebook.com/permalink.php?story_fbid=pfbid02MoviePostExample&id=10009999',
-        createdAt: new Date().toISOString(),
-        lastActionAt: null
-    },
-    {
-        id: 'post_demo_phim_2',
-        url: 'https://www.facebook.com/groups/congdongreviewphim/posts/9876543210',
-        tag: 'Post Review Phim Hot',
-        category: 'PHIM_PROMO',
-        status: 'PENDING',
-        currentComment: 'Link xem trọn bộ bản nét HD tại đây mọi người ơi - kho phim vietsub chất lượng cao cập nhật liên tục 🎬\nhttps://www.facebook.com/permalink.php?story_fbid=pfbid02MoviePostExample&id=10009999',
-        createdAt: new Date().toISOString(),
-        lastActionAt: null
-    },
-    {
-        id: 'post_demo_3',
-        url: 'https://www.facebook.com/watch/?v=123456789',
-        tag: 'Video Reel Review Phim',
-        category: 'PHIM_PROMO',
-        status: 'COMPLETED',
-        currentComment: 'Xem full bộ vietsub cực nét ở đây nha - nhiều phim chiếu rạp đỉnh lắm nè 🍿\nhttps://www.facebook.com/permalink.php?story_fbid=pfbid02MoviePostExample&id=10009999',
-        createdAt: new Date().toISOString(),
-        lastActionAt: new Date(Date.now() - 3600000).toISOString()
-    }
-];
+// Initial Empty Data (No Mock Data)
+const INITIAL_SAMPLE_POSTS = [];
 
 class StorageManager {
     /**
@@ -62,11 +31,13 @@ class StorageManager {
     static savePromoLink(url) {
         if (url && url.trim()) {
             localStorage.setItem(STORAGE_KEYS.PROMO_LINK, url.trim());
+        } else {
+            localStorage.removeItem(STORAGE_KEYS.PROMO_LINK);
         }
     }
 
     /**
-     * Gets all posts from LocalStorage, or initializes with samples if empty
+     * Gets all posts from LocalStorage, or initializes with empty array if clean
      * @returns {Array}
      */
     static getPosts() {
@@ -210,12 +181,12 @@ class StorageManager {
     }
 
     /**
-     * Resets data back to initial demo data
+     * Resets data back to clean state
      */
     static resetToDemoData() {
-        this.savePosts(INITIAL_SAMPLE_POSTS);
+        this.savePosts([]);
         this.saveTemplates(window.DEFAULT_TEMPLATES || []);
-        this.savePromoLink(DEFAULT_PROMO_LINK);
+        this.savePromoLink('');
     }
 }
 
