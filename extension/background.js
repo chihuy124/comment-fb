@@ -37,8 +37,62 @@ function ensureKeepAlive() {
   }, 20000);
 }
 
+// Inject a "pin reel" script into a tab's MAIN world. Bypasses FB's CSP
+// which blocks content-script-injected <script> tags. Freezes navigation
+// and playback so the tab stays on the requested reel for the whole scrape.
+async function pinReelInPageWorld(tabId, pinnedReelId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: (pinned) => {
+        if (window.__fbSeedingPinned) return;
+        window.__fbSeedingPinned = pinned;
+        const extractId = (href) => {
+          try {
+            const u = new URL(href, location.href);
+            const m = u.pathname.match(/^\/reels?\/(\d+)/);
+            if (m) return 'reel:' + m[1];
+            if (u.pathname.indexOf('/watch') === 0) {
+              const v = u.searchParams.get('v');
+              if (v) return 'watch:' + v;
+            }
+          } catch (e) {}
+          return null;
+        };
+        const _push = history.pushState.bind(history);
+        const _replace = history.replaceState.bind(history);
+        history.pushState = function (s, t, url) {
+          if (url) { const id = extractId(url); if (id && id !== pinned) return; }
+          return _push(s, t, url);
+        };
+        history.replaceState = function (s, t, url) {
+          if (url) { const id = extractId(url); if (id && id !== pinned) return; }
+          return _replace(s, t, url);
+        };
+        HTMLMediaElement.prototype.play = function () {
+          try { this.pause(); } catch (e) {}
+          return Promise.resolve();
+        };
+        console.log('[FB Seeding MAIN] pinned to', pinned);
+      },
+      args: [pinnedReelId],
+    });
+    console.log('[BG] pinned tab', tabId, 'to', pinnedReelId);
+  } catch (e) {
+    console.error('[BG] pin failed:', e);
+  }
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   console.log('[BG] recv', msg?.type, 'from', sender.tab?.id ? `tab=${sender.tab.id}` : (sender.url || 'unknown'));
+
+  // Content script asking to pin its tab (freeze reel + video in MAIN world)
+  if (msg?.type === 'REQUEST_PIN' && sender.tab?.id != null && msg.reelId) {
+    pinReelInPageWorld(sender.tab.id, msg.reelId);
+    sendResponse({ ok: true });
+    return false;
+  }
 
   // Content script asking what to do
   if (msg?.type === 'GET_MISSION' && sender.tab?.id != null) {

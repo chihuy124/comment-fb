@@ -129,9 +129,17 @@ async function scrapeComments() {
   const startReelId = extractReelId(location.href);
   console.log('[FB Seeding CS] scrape start on', location.href, 'reelId=', startReelId);
 
-  // CRITICAL: pin the reel FIRST, before waiting/interacting. Pauses videos
-  // and patches history in both content-script AND page worlds so FB cannot
-  // auto-advance to another reel during our ~15-20s scrape window.
+  // CRITICAL: ask background to inject a MAIN-world script that patches
+  // history + overrides HTMLMediaElement.play. Content-script injected
+  // <script> tags are blocked by FB's CSP, so this must go through
+  // chrome.scripting.executeScript from the extension.
+  if (startReelId) {
+    try {
+      await chrome.runtime.sendMessage({ type: 'REQUEST_PIN', reelId: startReelId });
+    } catch (e) { console.warn('[FB Seeding CS] pin request failed', e); }
+  }
+
+  // Belt-and-braces: also pause videos from the isolated world.
   const stopAutoAdvance = startAutoPauseLoop(startReelId);
 
   // Give FB Reel viewer time to hydrate before we touch anything
@@ -187,8 +195,9 @@ async function scrapeComments() {
 }
 
 function startAutoPauseLoop(startReelId) {
-  // (a) Pause every <video>. Content script has DOM access so this works
-  //     directly on the same element FB uses.
+  // Belt-and-braces: pause every <video> from the isolated world. Backup for
+  // the MAIN-world play() override — even if injection is slow, this catches
+  // videos that are already playing.
   const pauseAll = () => {
     document.querySelectorAll('video').forEach((v) => {
       try {
@@ -199,61 +208,7 @@ function startAutoPauseLoop(startReelId) {
   };
   pauseAll();
   const pauseInterval = setInterval(pauseAll, 400);
-
-  // (b) Inject a <script> into the PAGE WORLD to patch history + override
-  //     HTMLMediaElement.play so FB code can't override our pause. Content
-  //     script's isolated world can't touch FB's own `history` reference,
-  //     so injection is the only way to intercept navigation.
-  const guardScript = document.createElement('script');
-  guardScript.dataset.fbSeedingGuard = '1';
-  guardScript.textContent =
-    '(function(){' +
-    '  var pinned = ' + JSON.stringify(startReelId) + ';' +
-    '  function extractId(href){' +
-    '    try{' +
-    '      var u = new URL(href, location.href);' +
-    '      var m = u.pathname.match(/^\\/reels?\\/(\\d+)/);' +
-    '      if(m) return "reel:"+m[1];' +
-    '      if(u.pathname.indexOf("/watch")===0){' +
-    '        var v=u.searchParams.get("v");' +
-    '        if(v) return "watch:"+v;' +
-    '      }' +
-    '    }catch(e){}' +
-    '    return null;' +
-    '  }' +
-    '  var _push = history.pushState.bind(history);' +
-    '  var _replace = history.replaceState.bind(history);' +
-    '  window.__fbSeedingRestore = {push:_push,replace:_replace};' +
-    '  history.pushState = function(state, title, url){' +
-    '    if(url){var t=extractId(url); if(t && t!==pinned){console.log("[page] blocked pushState to",t); return;}}' +
-    '    return _push(state,title,url);' +
-    '  };' +
-    '  history.replaceState = function(state, title, url){' +
-    '    if(url){var t=extractId(url); if(t && t!==pinned){console.log("[page] blocked replaceState to",t); return;}}' +
-    '    return _replace(state,title,url);' +
-    '  };' +
-    '  var origPlay = HTMLMediaElement.prototype.play;' +
-    '  window.__fbSeedingRestore.play = origPlay;' +
-    '  HTMLMediaElement.prototype.play = function(){ try{this.pause();}catch(e){} return Promise.resolve(); };' +
-    '})();';
-  (document.head || document.documentElement).appendChild(guardScript);
-  guardScript.remove();
-
-  return function stop() {
-    clearInterval(pauseInterval);
-    const restoreScript = document.createElement('script');
-    restoreScript.textContent =
-      '(function(){' +
-      '  var r = window.__fbSeedingRestore;' +
-      '  if(!r) return;' +
-      '  history.pushState = r.push;' +
-      '  history.replaceState = r.replace;' +
-      '  HTMLMediaElement.prototype.play = r.play;' +
-      '  delete window.__fbSeedingRestore;' +
-      '})();';
-    (document.head || document.documentElement).appendChild(restoreScript);
-    restoreScript.remove();
-  };
+  return function stop() { clearInterval(pauseInterval); };
 }
 
 function extractReelId(href) {
