@@ -126,15 +126,16 @@ async function discoverMode(durationMs) {
 // ---------- SCRAPE MODE (comments on a single Reel) ----------
 
 async function scrapeComments() {
-  const startPath = location.pathname;
   const startReelId = extractReelId(location.href);
   console.log('[FB Seeding CS] scrape start on', location.href, 'reelId=', startReelId);
 
+  // Give FB Reel viewer time to hydrate before we touch anything
+  await sleep(3000);
   await dismissLoginNags();
 
   // Desktop Reel UI: comments live in a side panel that opens on click.
-  await openCommentPanel();
-  await sleep(1500);
+  const opened = await openCommentPanel();
+  console.log('[FB Seeding CS] panel opened =', opened);
   await switchToAllComments();
 
   // Only scroll the comment panel itself. NEVER scroll the window in scrape
@@ -194,33 +195,56 @@ function extractReelId(href) {
 }
 
 async function openCommentPanel() {
-  // Look for any button/link whose text or aria-label references comments.
-  // Desktop Reel page has a "Comment" button on the right rail; clicking opens the panel.
-  const nodes = Array.from(document.querySelectorAll(
-    'div[role="button"], a[role="link"], span, [aria-label]'
-  ));
-  const isCommentTrigger = (el) => {
-    const label = (el.getAttribute && el.getAttribute('aria-label') || '').toLowerCase();
-    const text = (el.innerText || '').toLowerCase().trim();
-    return (
-      /^comment$/.test(label) || /^bình luận$/.test(label) ||
-      /^\d+\s*(comment|bình luận)/.test(label) ||
-      /^\d+\s*(comment|bình luận)/.test(text) ||
-      label === 'leave a comment' || label === 'viết bình luận' ||
-      (text.includes('comment') && text.length < 30) ||
-      (text.includes('bình luận') && text.length < 30)
+  // Return true iff we can confirm the comment panel is open by finding
+  // at least one per-comment aria-label node in the DOM.
+  const isPanelOpen = () =>
+    !!document.querySelector(
+      '[aria-label^="Bình luận dưới tên"], [aria-label^="Comment by"], [aria-label^="Bình luận của"]'
     );
-  };
-  for (const el of nodes) {
-    if (isCommentTrigger(el)) {
-      try {
-        el.click();
-        console.log('[FB Seeding CS] clicked comment trigger:', el.getAttribute('aria-label') || el.innerText?.slice(0, 40));
-        return;
-      } catch (e) {}
+
+  if (isPanelOpen()) {
+    console.log('[FB Seeding CS] panel already open');
+    return true;
+  }
+
+  const patterns = [
+    /^\d+[\s.,]*(bình luận|comment)/i,
+    /^(bình luận|comment)$/i,
+    /^(bình luận|comment)\s*\d+/i,
+    /(view|xem)\s*(all\s*)?(comments?|bình luận)/i,
+    /^(leave|viết)\s*(a\s*)?(comment|bình luận)/i,
+  ];
+  const matches = (t) => t && patterns.some((p) => p.test(t));
+
+  const candidates = Array.from(document.querySelectorAll(
+    '[aria-label], div[role="button"], a[role="link"], div[role="link"]'
+  ));
+
+  for (const el of candidates) {
+    const label = (el.getAttribute && el.getAttribute('aria-label') || '').trim();
+    const text = (el.innerText || '').trim().slice(0, 60);
+    if (!matches(label) && !matches(text)) continue;
+
+    // Try clicking the element AND up to 3 ancestors — FB nests the actual
+    // click target inside decorative spans.
+    let target = el;
+    for (let up = 0; up < 4 && target; up++) {
+      try { target.click(); } catch (e) {}
+      target = target.parentElement;
+    }
+    console.log('[FB Seeding CS] tried opening panel via:', label || text);
+
+    // Give React up to 3s to render the panel; poll every 500ms
+    for (let wait = 0; wait < 6; wait++) {
+      await sleep(500);
+      if (isPanelOpen()) {
+        console.log('[FB Seeding CS] panel opened after', (wait + 1) * 500, 'ms');
+        return true;
+      }
     }
   }
-  console.log('[FB Seeding CS] no comment trigger found');
+
+  return isPanelOpen();
 }
 
 function findCommentScrollContainer() {
