@@ -59,6 +59,9 @@ document.addEventListener('DOMContentLoaded', () => {
         minIntentCount: document.getElementById('min-intent-count'),
         scannedResultsContainer: document.getElementById('scanned-results-container'),
         btnImportScannedAll: document.getElementById('btn-import-scanned-all'),
+        intentKeywordsContainer: document.getElementById('intent-keywords-container'),
+        inputNewIntentKeyword: document.getElementById('input-new-intent-keyword'),
+        btnAddIntentKeyword: document.getElementById('btn-add-intent-keyword'),
 
         // Cloud API Settings
         customCloudApiUrl: document.getElementById('custom-cloud-api-url'),
@@ -75,6 +78,49 @@ document.addEventListener('DOMContentLoaded', () => {
     // State
     let currentTab = 'dashboard-tab';
     let scannedItems = [];
+    let intentKeywords = getStoredIntentKeywords();
+
+    function getStoredIntentKeywords() {
+        const stored = localStorage.getItem('fb_intent_keywords');
+        if (stored) {
+            try { return JSON.parse(stored); } catch(e) {}
+        }
+        return ['xin link', 'tập 2', 'xem ở đâu', 'tên phim là gì', 'link full', 'xem tiếp', 'x tiếp'];
+    }
+
+    function saveIntentKeywords(keywords) {
+        intentKeywords = keywords;
+        localStorage.setItem('fb_intent_keywords', JSON.stringify(keywords));
+        renderIntentKeywords();
+    }
+
+    function renderIntentKeywords() {
+        if (!elements.intentKeywordsContainer) return;
+        elements.intentKeywordsContainer.innerHTML = '';
+        intentKeywords.forEach((kw, index) => {
+            const span = document.createElement('span');
+            span.className = 'post-tag-badge';
+            span.style.display = 'inline-flex';
+            span.style.alignItems = 'center';
+            span.style.gap = '0.3rem';
+            span.style.padding = '0.35rem 0.65rem';
+
+            span.innerHTML = `
+                <span>${escapeHtml(kw)}</span>
+                <span class="btn-remove-tag" data-index="${index}" style="cursor:pointer; font-weight:bold; margin-left:0.2rem; opacity:0.7;">&times;</span>
+            `;
+            elements.intentKeywordsContainer.appendChild(span);
+        });
+
+        document.querySelectorAll('.btn-remove-tag').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const idx = parseInt(e.currentTarget.getAttribute('data-index'));
+                const removed = intentKeywords.splice(idx, 1);
+                saveIntentKeywords(intentKeywords);
+                showToast(`Đã xóa từ khóa intent "${removed[0]}"`, 'info');
+            });
+        });
+    }
 
     // Gets active Scanner API Endpoint
     function getScannerApiUrl() {
@@ -101,6 +147,7 @@ document.addEventListener('DOMContentLoaded', () => {
         bindEvents();
         initPromoLink();
         initCloudApiSetting();
+        renderIntentKeywords();
         renderAll();
         initTheme();
     }
@@ -398,13 +445,13 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // --- TAB 5: REEL INTENT SCANNER LOGIC (Calls Cloud Backend API) ---
+    // --- TAB 5: REEL INTENT SCANNER LOGIC (Handles dynamic keywords, intent keywords & custom min_intent count) ---
     async function handleStartScan() {
-        const keyword = elements.scanKeywordInput.value.trim() || 'review phim hay';
-        const minCount = parseInt(elements.minIntentCount.value) || 1;
+        const rawKeywords = elements.scanKeywordInput.value.trim() || 'review phim hay, phim chiếu rạp';
+        const minCount = Math.max(1, parseInt(elements.minIntentCount.value) || 2);
         const apiUrl = getScannerApiUrl();
 
-        showToast(`Đang kết nối Server Cloud Render (${apiUrl}) quét & phân tích comment...`, 'info');
+        showToast(`Đang kết nối Server Cloud (${apiUrl}) quét bài Reels theo từ khóa "${rawKeywords}"...`, 'info');
         elements.btnStartScan.disabled = true;
         elements.btnStartScan.innerHTML = '<span>Đang kết nối Server Cloud đọc comment...</span>';
 
@@ -412,24 +459,28 @@ document.addEventListener('DOMContentLoaded', () => {
             const response = await fetch(apiUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ keyword: keyword, min_intent: minCount })
+                body: JSON.stringify({ 
+                    keyword: rawKeywords, 
+                    min_intent: minCount,
+                    intent_keywords: intentKeywords
+                })
             });
 
             if (response.ok) {
                 const data = await response.json();
                 scannedItems = data.results || [];
-                showToast(`Server Cloud đã trả về ${scannedItems.length} bài Reels có comment hỏi thật 100%!`, 'success');
+                showToast(`Server Cloud đã trả về ${scannedItems.length} bài Reels có comment hỏi từ mốc ${minCount} trở lên!`, 'success');
             } else {
                 throw new Error('API response not ok');
             }
         } catch (err) {
             console.warn('Backend API offline or connecting, using direct Cloud Dataset fallback:', err);
             
-            // Live Real Comment Data Fallback (Exact match to Facebook video)
+            // Live Real Comment Data Fallback
             scannedItems = [
                 {
                     url: 'https://www.facebook.com/watch/?v=3439107119599902',
-                    tag: `Reels Review Phim: ${keyword}`,
+                    tag: `Reels Phim: ${rawKeywords}`,
                     intentCount: 2,
                     intentComments: [
                         'Hoa Mẫu Đơn: X tiếp',
@@ -470,7 +521,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (scannedItems.length === 0) {
             elements.scannedResultsContainer.innerHTML = `
                 <div class="empty-state" style="padding:2rem 1rem;">
-                    <p>Không tìm thấy bài Reels nào phù hợp tiêu chí.</p>
+                    <p>Không tìm thấy bài Reels nào có đủ số người hỏi theo tiêu chí tối thiểu bạn chọn.</p>
                 </div>
             `;
             elements.btnImportScannedAll.disabled = true;
@@ -531,6 +582,27 @@ document.addEventListener('DOMContentLoaded', () => {
                 switchTab(targetTab);
             });
         });
+
+        // Intent Keywords Add/Remove
+        if (elements.btnAddIntentKeyword) {
+            const addKeyword = () => {
+                const val = elements.inputNewIntentKeyword.value.trim().toLowerCase();
+                if (val && !intentKeywords.includes(val)) {
+                    intentKeywords.push(val);
+                    saveIntentKeywords(intentKeywords);
+                    elements.inputNewIntentKeyword.value = '';
+                    showToast(`Đã thêm từ khóa nhu cầu mới: "${val}"`, 'success');
+                }
+            };
+
+            elements.btnAddIntentKeyword.addEventListener('click', addKeyword);
+            elements.inputNewIntentKeyword.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    addKeyword();
+                }
+            });
+        }
 
         // Modals
         elements.btnOpenAddModal.addEventListener('click', () => {

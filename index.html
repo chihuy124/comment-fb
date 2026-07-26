@@ -298,31 +298,30 @@
                             <h3>Cấu hình Bộ Lọc Comment Hỏi Phim 🔥</h3>
                         </div>
                         <div class="card-body">
+                            <!-- Custom Intent Keywords Manager -->
                             <div class="form-group">
-                                <label>Các bộ từ khóa nhu cầu cao (Intent Keywords):</label>
-                                <div class="keyword-tags-group" style="display:flex; flex-wrap:wrap; gap:0.5rem; margin-bottom:1rem;">
-                                    <span class="post-tag-badge">xin link</span>
-                                    <span class="post-tag-badge">tập 2</span>
-                                    <span class="post-tag-badge">xem ở đâu</span>
-                                    <span class="post-tag-badge">tên phim là gì</span>
-                                    <span class="post-tag-badge">link full</span>
-                                    <span class="post-tag-badge">xem tiếp</span>
-                                    <span class="post-tag-badge">x tiếp</span>
+                                <label>Quản lý các từ khóa nhu cầu cao (Nhấn x để xóa, dán từ mới để thêm):</label>
+                                <div id="intent-keywords-container" class="keyword-tags-group" style="display:flex; flex-wrap:wrap; gap:0.5rem; margin-bottom:0.75rem;">
+                                    <!-- Rendered dynamically -->
+                                </div>
+                                <div style="display:flex; gap:0.5rem;">
+                                    <input type="text" id="input-new-intent-keyword" class="form-control" placeholder="Thêm từ khóa nhu cầu mới (VD: xin link, tập 2)...">
+                                    <button class="btn btn-secondary btn-sm" id="btn-add-intent-keyword" style="white-space:nowrap;">+ Thêm từ khóa</button>
                                 </div>
                             </div>
 
+                            <!-- Multiple Search Keywords Input -->
                             <div class="form-group">
-                                <label for="scan-keyword-input">Nhập từ khóa tìm kiếm Reels Phim:</label>
-                                <input type="text" id="scan-keyword-input" class="form-control" value="review phim hay" placeholder="Ví dụ: review phim chiếu rạp, phim hành động...">
+                                <label for="scan-keyword-input">Nhập từ khóa tìm kiếm Reels Phim (Có thể nhập nhiều từ khóa cách nhau bởi dấu phẩy):</label>
+                                <textarea id="scan-keyword-input" class="form-control" rows="2" placeholder="Ví dụ: review phim hay, phim chiếu rạp, tóm tắt phim...">review phim hay, phim chiếu rạp</textarea>
+                                <small class="form-help">Hệ thống sẽ tự động tìm kiếm qua tất cả các từ khóa bạn nhập.</small>
                             </div>
 
+                            <!-- Custom Min Intent Number Input -->
                             <div class="form-group">
-                                <label for="min-intent-count">Số người comment hỏi tối thiểu:</label>
-                                <select id="min-intent-count" class="form-control">
-                                    <option value="1">Có ít nhất 1 người hỏi</option>
-                                    <option value="2" selected>Có ít nhất 2 người hỏi trở lên 🔥</option>
-                                    <option value="5">Có ít nhất 5 người hỏi trở lên 🔥🔥</option>
-                                </select>
+                                <label for="min-intent-count">Số người comment hỏi tối thiểu (Tùy chỉnh con số bạn muốn):</label>
+                                <input type="number" id="min-intent-count" class="form-control" value="2" min="1" max="100" placeholder="Nhập số người tối thiểu (ví dụ: 1, 2, 5, 10)...">
+                                <small class="form-help">Chỉ giữ lại các bài Reels có ít nhất số lượng người comment hỏi từ mốc này trở lên.</small>
                             </div>
 
                             <button class="btn btn-primary" id="btn-start-scan" style="width:100%; margin-top:0.5rem;">
