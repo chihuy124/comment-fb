@@ -482,7 +482,13 @@ document.addEventListener('DOMContentLoaded', () => {
         const fbCookie = localStorage.getItem('fb_user_cookie') || '';
         const apiUrl = getScannerApiUrl();
 
-        showToast(`Đang kết nối Server (${apiUrl}) cào live Facebook theo từ khóa "${rawKeywords}"...`, 'info');
+        // Build exclude list: every URL already in Bảng Seeding (any status).
+        // Backend will skip these entirely — nothing is re-crawled once you've
+        // added it to your board.
+        const existingPosts = StorageManager.getPosts();
+        const excludeUrls = existingPosts.map(p => p.url);
+
+        showToast(`Đang kết nối Server (${apiUrl}) cào live Facebook theo từ khóa "${rawKeywords}" (loại trừ ${excludeUrls.length} bài đã có)...`, 'info');
         elements.btnStartScan.disabled = true;
         elements.btnStartScan.innerHTML = '<span>Đang cào trực tiếp Facebook Reels & phân tích comment...</span>';
 
@@ -490,18 +496,20 @@ document.addEventListener('DOMContentLoaded', () => {
             const response = await fetch(apiUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    keyword: rawKeywords, 
+                body: JSON.stringify({
+                    keyword: rawKeywords,
                     min_intent: minCount,
                     intent_keywords: intentKeywords,
-                    fb_cookie: fbCookie
+                    fb_cookie: fbCookie,
+                    exclude_urls: excludeUrls
                 })
             });
 
             if (response.ok) {
                 const data = await response.json();
                 scannedItems = data.results || [];
-                showToast(`Đã cào tự động và trả về ${scannedItems.length} bài Reels từ Facebook!`, 'success');
+                const excluded = data.excludedCount || excludeUrls.length;
+                showToast(`Đã cào ${scannedItems.length} bài Reels mới (đã loại ${excluded} bài trùng với Bảng Seeding).`, 'success');
             } else {
                 throw new Error('API response not ok');
             }
@@ -568,9 +576,10 @@ document.addEventListener('DOMContentLoaded', () => {
                         'Hiệu Phạm Thị: Xem tiếp'
                     ]
                 }
-            ].filter(item => item.intentCount >= minCount);
+            ].filter(item => item.intentCount >= minCount)
+             .filter(item => !excludeUrls.includes(item.url));
 
-            showToast(`Đã kết nối dữ liệu bình luận thực tế thành công!`, 'success');
+            showToast(`Server không phản hồi — dùng pool dự phòng, đã lọc ${excludeUrls.length} bài trùng.`, 'info');
         } finally {
             elements.btnStartScan.disabled = false;
             elements.btnStartScan.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg><span>Tự Động Quét & Phân Tích Comment Reels</span>';

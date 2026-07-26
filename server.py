@@ -3,6 +3,8 @@ import re
 import json
 import time
 import unicodedata
+from urllib.parse import urlparse, parse_qs, quote, urljoin
+
 import requests
 from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify
@@ -12,7 +14,7 @@ app = Flask(__name__)
 CORS(app)
 
 DEFAULT_INTENT_KEYWORDS = [
-    'xin link', 'tập 2', 'xem ở đâu', 'tên phim là gì', 'link full', 
+    'xin link', 'tập 2', 'xem ở đâu', 'tên phim là gì', 'link full',
     'xem tiếp', 'x tiếp', 'tập tiếp', 'trọn bộ', 'chọn bộ', 'tiếp đi'
 ]
 
@@ -22,190 +24,409 @@ BASE_HEADERS = {
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
 }
 
+REQUEST_TIMEOUT = 15
+MAX_PAGES_PER_ENDPOINT = 3      # pagination depth
+MAX_LIVE_ITEMS_PER_KEYWORD = 40
+
+
+# ---------- Helpers ----------
+
 def normalize_text(text):
-    """Normalize vietnamese text and remove accents for fuzzy matching."""
     if not text:
         return ""
     text = text.lower().strip()
     text = unicodedata.normalize('NFD', text)
-    text = re.sub(r'[\u0300-\u036f]', '', text)
+    text = re.sub(r'[̀-ͯ]', '', text)
     return text
 
+
 def is_comment_matched(comment_text, keywords):
-    """Checks if a comment matches any of the intent keywords."""
     norm_comment = normalize_text(comment_text)
     for kw in keywords:
-        norm_kw = normalize_text(kw)
-        if norm_kw in norm_comment:
+        if normalize_text(kw) in norm_comment:
             return True
     return False
 
-def parse_intent_comments(comments, custom_intent_keywords=None):
-    """Scans list of raw comments and returns matching ones."""
-    keywords = custom_intent_keywords if custom_intent_keywords else DEFAULT_INTENT_KEYWORDS
-    matched = []
-    for c in comments:
-        if is_comment_matched(c, keywords):
-            matched.append(c.strip())
-    return matched
 
-def live_crawl_facebook_reels(keyword, fb_cookie=None):
+def parse_intent_comments(comments, custom_intent_keywords=None):
+    keywords = custom_intent_keywords if custom_intent_keywords else DEFAULT_INTENT_KEYWORDS
+    return [c.strip() for c in comments if is_comment_matched(c, keywords)]
+
+
+def canonicalize_fb_url(raw_url):
+    """Return canonical facebook.com URL preserving reel/watch identifiers.
+    - /reel/{id} or /reels/{id}  →  https://www.facebook.com/reel/{id}
+    - /watch/?v={id}             →  https://www.facebook.com/watch/?v={id}
+    - /story.php?story_fbid=X    →  https://www.facebook.com/story.php?story_fbid=X&id=Y
+    Returns None if URL is not a recognised FB video permalink.
     """
-    Live Scraper Function: Searches public Facebook Reels endpoint.
-    Uses user-provided FB Cookie to bypass login wall and fetch live posts & comments!
+    if not raw_url:
+        return None
+    if raw_url.startswith('/'):
+        raw_url = 'https://www.facebook.com' + raw_url
+    if raw_url.startswith('//'):
+        raw_url = 'https:' + raw_url
+
+    try:
+        parsed = urlparse(raw_url)
+    except Exception:
+        return None
+
+    host = (parsed.hostname or '').lower()
+    if 'facebook.com' not in host and 'fb.watch' not in host:
+        return None
+
+    path = parsed.path or ''
+    qs = parse_qs(parsed.query)
+
+    # /reel/{id} or /reels/{id}
+    m = re.match(r'^/reels?/(\d+)', path)
+    if m:
+        return f"https://www.facebook.com/reel/{m.group(1)}"
+
+    # /watch — needs v= to be a specific video
+    if path.startswith('/watch'):
+        v = qs.get('v', [None])[0]
+        if v and v.isdigit():
+            return f"https://www.facebook.com/watch/?v={v}"
+        return None
+
+    # story.php
+    if path.startswith('/story.php'):
+        story = qs.get('story_fbid', [None])[0]
+        pid = qs.get('id', [None])[0]
+        if story:
+            base = f"https://www.facebook.com/story.php?story_fbid={story}"
+            if pid:
+                base += f"&id={pid}"
+            return base
+
+    # /{user}/videos/{id}
+    m = re.match(r'^/([^/]+)/videos/(\d+)', path)
+    if m:
+        return f"https://www.facebook.com/{m.group(1)}/videos/{m.group(2)}"
+
+    return None
+
+
+def extract_permalinks_from_html(html_text):
+    """Extract every canonical FB video/reel permalink from raw HTML using regex.
+    Works even when BeautifulSoup misses lazy-rendered nodes.
     """
-    scanned_items = []
+    found = set()
+
+    # /reel/{id}
+    for m in re.finditer(r'/reels?/(\d{8,})', html_text):
+        found.add(f"https://www.facebook.com/reel/{m.group(1)}")
+
+    # /watch/?v={id}   or   watch%2F%3Fv%3D{id}   or   "v":"{id}"
+    for m in re.finditer(r'/watch/?\?v=(\d{8,})', html_text):
+        found.add(f"https://www.facebook.com/watch/?v={m.group(1)}")
+    for m in re.finditer(r'watch%2F%3Fv%3D(\d{8,})', html_text):
+        found.add(f"https://www.facebook.com/watch/?v={m.group(1)}")
+
+    # /{user}/videos/{id}
+    for m in re.finditer(r'facebook\.com/([A-Za-z0-9\.\-_]+)/videos/(\d{8,})', html_text):
+        user, vid = m.group(1), m.group(2)
+        if user not in ('watch', 'reel', 'reels', 'story.php'):
+            found.add(f"https://www.facebook.com/{user}/videos/{vid}")
+
+    return found
+
+
+def follow_next_page(soup, base_url):
+    """Find the mbasic 'See more' / pagination link."""
+    for a in soup.find_all('a', href=True):
+        text = (a.get_text() or '').lower()
+        href = a['href']
+        if any(kw in text for kw in ('xem thêm', 'see more', 'thêm kết quả', 'more results', 'trang tiếp')):
+            return urljoin(base_url, href)
+        # mbasic's search paginator often uses ?cursor= or bacr=
+        if 'search' in base_url and ('cursor=' in href or 'bacr=' in href):
+            return urljoin(base_url, href)
+    return None
+
+
+def fetch_reel_comments(url, headers):
+    """Best-effort scrape of comments on an individual Reel/video page (mbasic version).
+    Returns a list of comment strings — may be empty if FB shows login wall.
+    """
+    try:
+        # mbasic version of the same permalink
+        mbasic_url = url.replace('www.facebook.com', 'mbasic.facebook.com')
+        res = requests.get(mbasic_url, headers=headers, timeout=REQUEST_TIMEOUT, allow_redirects=True)
+        if res.status_code != 200:
+            return []
+        soup = BeautifulSoup(res.text, 'html.parser')
+
+        comments = []
+        # mbasic typically wraps comments in <div id="ufi_..."> containing many child <div>s
+        for div in soup.find_all('div'):
+            text = div.get_text(' ', strip=True)
+            if not text or len(text) < 4 or len(text) > 400:
+                continue
+            # skip navigation / obvious chrome
+            low = text.lower()
+            if any(bad in low for bad in ('facebook', 'đăng nhập', 'like page', 'trang chủ', 'thông báo')):
+                continue
+            comments.append(text)
+
+        # de-duplicate while preserving order
+        seen = set()
+        uniq = []
+        for c in comments:
+            if c not in seen:
+                seen.add(c)
+                uniq.append(c)
+        return uniq[:80]
+    except Exception:
+        return []
+
+
+# ---------- Live crawler ----------
+
+def expand_search_keywords(keyword):
+    """Generate related query variants to widen coverage."""
+    kw = keyword.strip()
+    variants = {kw}
+    lower = kw.lower()
+    variants.add(f"reels {kw}")
+    variants.add(f"{kw} reels")
+    if 'phim' in lower:
+        variants.update([f"review {kw}", f"{kw} hay", f"{kw} vietsub"])
+    return list(variants)
+
+
+def live_crawl_facebook_reels(keyword, fb_cookie=None, exclude_urls=None):
+    """Aggressive multi-endpoint crawler:
+    - mbasic /search/videos
+    - mbasic /search/posts
+    - mbasic /hashtag
+    - mbasic /watch/search
+    Extracts permalinks via regex (robust to lazy nodes), follows pagination,
+    and fetches real comments from each Reel page.
+    """
+    exclude_urls = set(exclude_urls or [])
     headers = BASE_HEADERS.copy()
     if fb_cookie and fb_cookie.strip():
         headers['Cookie'] = fb_cookie.strip()
 
-    try:
-        # Search query across mobile endpoints
-        search_url = f"https://mbasic.facebook.com/search/videos/?q={requests.utils.quote(keyword)}"
-        res = requests.get(search_url, headers=headers, timeout=8)
-        if res.status_code == 200:
-            soup = BeautifulSoup(res.text, 'html.parser')
-            for a in soup.find_all('a', href=True):
-                href = a['href']
-                if '/watch/' in href or '/reel/' in href or 'story.php' in href or '/v/' in href:
-                    clean_url = href.split('&')[0].split('?')[0]
-                    if clean_url.startswith('/'):
-                        clean_url = 'https://www.facebook.com' + clean_url
-                    if clean_url not in [item['url'] for item in scanned_items]:
-                        scanned_items.append({
-                            "url": clean_url,
-                            "tag": f"Reels Live Cookie: {keyword}",
-                            "raw_comments": [
-                                "Khách xem: Xin link full tập tiếp theo với ạ",
-                                "Người dùng: Cho em xin tên phim này với ạ"
-                            ]
-                        })
-    except Exception as e:
-        print(f"Live crawler notice: {e}")
-    
+    encoded_kw = quote(keyword)
+    endpoints = [
+        f"https://mbasic.facebook.com/search/videos/?q={encoded_kw}",
+        f"https://mbasic.facebook.com/search/posts/?q={encoded_kw}",
+        f"https://mbasic.facebook.com/watch/search/?q={encoded_kw}",
+        f"https://mbasic.facebook.com/hashtag/{encoded_kw.replace('%20', '')}",
+    ]
+
+    collected_urls = set()
+    tag_by_url = {}
+
+    for endpoint in endpoints:
+        url_to_fetch = endpoint
+        for page in range(MAX_PAGES_PER_ENDPOINT):
+            try:
+                res = requests.get(url_to_fetch, headers=headers, timeout=REQUEST_TIMEOUT, allow_redirects=True)
+            except Exception as e:
+                print(f"[crawler] {endpoint} page {page} error: {e}")
+                break
+            if res.status_code != 200:
+                break
+
+            html = res.text
+
+            # 1) regex sweep — most robust
+            for perma in extract_permalinks_from_html(html):
+                canonical = canonicalize_fb_url(perma)
+                if canonical and canonical not in exclude_urls:
+                    collected_urls.add(canonical)
+                    tag_by_url.setdefault(canonical, f"Live crawl: {keyword}")
+
+            # 2) BeautifulSoup — catch links whose ID was elsewhere
+            try:
+                soup = BeautifulSoup(html, 'html.parser')
+                for a in soup.find_all('a', href=True):
+                    canonical = canonicalize_fb_url(a['href'])
+                    if canonical and canonical not in exclude_urls:
+                        collected_urls.add(canonical)
+                        tag_by_url.setdefault(canonical, f"Live crawl: {keyword}")
+
+                next_url = follow_next_page(soup, url_to_fetch)
+            except Exception:
+                next_url = None
+
+            if len(collected_urls) >= MAX_LIVE_ITEMS_PER_KEYWORD:
+                break
+            if not next_url or next_url == url_to_fetch:
+                break
+            url_to_fetch = next_url
+            time.sleep(0.3)
+
+        if len(collected_urls) >= MAX_LIVE_ITEMS_PER_KEYWORD:
+            break
+
+    # For each URL, best-effort fetch real comments
+    scanned_items = []
+    for canonical in list(collected_urls)[:MAX_LIVE_ITEMS_PER_KEYWORD]:
+        raw_comments = fetch_reel_comments(canonical, headers)
+        scanned_items.append({
+            "url": canonical,
+            "tag": tag_by_url.get(canonical, f"Live crawl: {keyword}"),
+            "raw_comments": raw_comments or []
+        })
     return scanned_items
+
+
+# ---------- Fallback curated pool ----------
+
+CURATED_POOL = [
+    {
+        "url": "https://www.facebook.com/reel/1478696500970204",
+        "tag": "Reels Review Phim Hot",
+        "raw_comments": [
+            "Mai Nguyễn: Phim hay xem tiếp", "Trang Minh: Xem trọn bộ",
+            "Nguyễn Xoan: Xem chọn bộ", "Quan Ly Hue: Xem tập tiếp theo",
+            "Riview Phim Hay: Tiếp đi ạ", "Bà Lan Đen: Xemêtiêp",
+            "Nguyễn Gấm: xem phim chọn bộ", "Phuoc Bui: Phim hay cho xem tiếp",
+        ],
+    },
+    {
+        "url": "https://www.facebook.com/reel/3109878279219138",
+        "tag": "Reel Phim Mới Cắt Cực Hay",
+        "raw_comments": [
+            "Vũ Nam: Cho xin link full phim này với",
+            "Trần Thảo: Xem tiếp phần 2 ở đâu vậy ad",
+            "Lê Thanh: Tên phim là gì vậy shop?",
+            "Ngọc Hà: Hóng tập tiếp theo quá",
+            "Bảo Anh: Xin link full HD vietsub",
+        ],
+    },
+    {
+        "url": "https://www.facebook.com/reel/2304822646992426",
+        "tag": "Reel Phim Chiếu Rạp Hot Trend",
+        "raw_comments": [
+            "Đô Đô: Phim hay xem tiếp đi ad",
+            "Phạm Linh: Cho em xin link tập 2 với ạ",
+            "Hoàng Long: Phim tên gì vậy shop?",
+            "Minh Khuê: Hóng link full bộ này",
+        ],
+    },
+    {
+        "url": "https://www.facebook.com/reel/2923052638048599",
+        "tag": "Short Review Phim Hay Chọn Lọc",
+        "raw_comments": [
+            "Đặng Khôi: Xin link full bộ vietsub",
+            "Vũ Trang: Tập tiếp theo đâu rồi ad",
+            "Mai Anh: Cho xin link phần tiếp",
+            "Đặng Khoa: Hóng tập mới quá ad",
+        ],
+    },
+    {
+        "url": "https://www.facebook.com/watch/?v=3439107119599902",
+        "tag": "Reels Review Phim Hay",
+        "raw_comments": ["Hoa Mẫu Đơn: X tiếp", "Hiệu Phạm Thị: Xem tiếp"],
+    },
+    {
+        "url": "https://www.facebook.com/watch/?v=1089274910283741",
+        "tag": "Reel Cắt Phim Chiếu Rạp",
+        "raw_comments": [
+            "Lê Hoàng: Phim tên gì vậy ad?",
+            "Đỗ Minh: Hóng tập 2 quá ad ơi",
+            "Ngọc Ánh: Xem ở trang nào ad?",
+            "Bảo Long: Xin link full vietsub",
+        ],
+    },
+    {
+        "url": "https://www.facebook.com/watch/?v=8291048201948512",
+        "tag": "Reel Short Phim Hành Động",
+        "raw_comments": [
+            "Phạm Hùng: Xin link full bộ vietsub",
+            "Vũ Trang: Tập tiếp theo đâu rồi ad",
+            "Mai Anh: Cho xin link phần tiếp",
+        ],
+    },
+]
+
+
+def load_extra_pool():
+    """Optional external pool from crawler/reels_pool.json — makes it easy to
+    grow the seed set without editing code. File must be a list of the same
+    shape as CURATED_POOL.
+    """
+    path = os.path.join(os.path.dirname(__file__), 'crawler', 'reels_pool.json')
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return [x for x in data if isinstance(x, dict) and x.get('url')]
+    except Exception as e:
+        print(f"[pool] failed to load {path}: {e}")
+        return []
+
+
+# ---------- Routes ----------
 
 @app.route('/api/health', methods=['GET'])
 def health():
     return jsonify({"status": "ok", "service": "FB Reels Live Comment Scanner API"})
 
+
 @app.route('/api/scan', methods=['POST'])
 def scan_reels():
-    data = request.get_json() or {}
-    
-    # 1. Parse search keywords
+    data = request.get_json(silent=True) or {}
+
+    # keywords
     keywords_raw = data.get('keyword', 'review phim hay, phim chiếu rạp')
     if isinstance(keywords_raw, str):
         search_keywords = [k.strip() for k in keywords_raw.split(',') if k.strip()]
     else:
-        search_keywords = keywords_raw
-
+        search_keywords = list(keywords_raw)
     if not search_keywords:
         search_keywords = ['review phim hay', 'phim chiếu rạp']
 
-    # 2. Parse min_intent threshold from user input
-    min_intent = max(1, int(data.get('min_intent', 1)))
+    min_intent = max(1, int(data.get('min_intent', 1) or 1))
+    custom_intent_keywords = data.get('intent_keywords') or DEFAULT_INTENT_KEYWORDS
+    fb_cookie = data.get('fb_cookie', '') or ''
 
-    # 3. Parse intent keywords list
-    custom_intent_keywords = data.get('intent_keywords', DEFAULT_INTENT_KEYWORDS)
+    # exclude list — canonicalize so `/watch/?v=X&extra=1` == `/watch/?v=X`
+    raw_exclude = data.get('exclude_urls') or []
+    exclude_urls = set()
+    for u in raw_exclude:
+        c = canonicalize_fb_url(u) or u
+        exclude_urls.add(c)
 
-    # 4. Read User-Provided Facebook Cookie
-    fb_cookie = data.get('fb_cookie', '')
+    # Curated pool + extra file
+    pool = CURATED_POOL + load_extra_pool()
 
-    # Real Facebook Reels Network Pool
-    real_reels_network = [
-        {
-            "url": "https://www.facebook.com/reel/1478696500970204",
-            "tag": f"Reels Review Phim Hot ({', '.join(search_keywords)})",
-            "raw_comments": [
-                "Mai Nguyễn: Phim hay xem tiếp",
-                "Trang Minh: Xem trọn bộ",
-                "Nguyễn Xoan: Xem chọn bộ",
-                "Quan Ly Hue: Xem tập tiếp theo",
-                "Riview Phim Hay: Tiếp đi ạ",
-                "Bà Lan Đen: Xemêtiêp",
-                "Nguyễn Gấm: xem phim chọn bộ",
-                "Phuoc Bui: Phim hay cho xem tiếp cảm ơn bạn",
-                "Quang Trung: Hay",
-                "Bang Dam: Sem chọn"
-            ]
-        },
-        {
-            "url": "https://www.facebook.com/reel/3109878279219138",
-            "tag": "Reel Phim Mới Cắt Cực Hay",
-            "raw_comments": [
-                "Vũ Nam: Cho xin link full phim này với",
-                "Trần Thảo: Xem tiếp phần 2 ở đâu vậy ad",
-                "Lê Thanh: Tên phim là gì vậy shop?",
-                "Ngọc Hà: Hóng tập tiếp theo quá",
-                "Bảo Anh: Xin link full HD vietsub"
-            ]
-        },
-        {
-            "url": "https://www.facebook.com/reel/2304822646992426",
-            "tag": "Reel Phim Chiếu Rạp Hot Trend",
-            "raw_comments": [
-                "Đô Đô: Phim hay xem tiếp đi ad",
-                "Phạm Linh: Cho em xin link tập 2 với ạ",
-                "Hoàng Long: Phim tên gì vậy shop?",
-                "Minh Khuê: Hóng link full bộ này"
-            ]
-        },
-        {
-            "url": "https://www.facebook.com/reel/2923052638048599",
-            "tag": "Short Review Phim Hay Chọn Lọc",
-            "raw_comments": [
-                "Đặng Khôi: Xin link full bộ vietsub",
-                "Vũ Trang: Tập tiếp theo đâu rồi ad",
-                "Mai Anh: Cho xin link phần tiếp",
-                "Đặng Khoa: Hóng tập mới quá ad"
-            ]
-        },
-        {
-            "url": "https://www.facebook.com/watch/?v=3439107119599902",
-            "tag": "Reels Review Phim Hay",
-            "raw_comments": [
-                "Hoa Mẫu Đơn: X tiếp",
-                "Hiệu Phạm Thị: Xem tiếp"
-            ]
-        },
-        {
-            "url": "https://www.facebook.com/watch/?v=1089274910283741",
-            "tag": "Reel Cắt Phim Chiếu Rạp",
-            "raw_comments": [
-                "Lê Hoàng: Phim tên gì vậy ad?",
-                "Đỗ Minh: Hóng tập 2 quá ad ơi",
-                "Ngọc Ánh: Xem ở trang nào ad?",
-                "Bảo Long: Xin link full vietsub"
-            ]
-        },
-        {
-            "url": "https://www.facebook.com/watch/?v=8291048201948512",
-            "tag": "Reel Short Phim Hành Động",
-            "raw_comments": [
-                "Phạm Hùng: Xin link full bộ vietsub",
-                "Vũ Trang: Tập tiếp theo đâu rồi ad",
-                "Mai Anh: Cho xin link phần tiếp"
-            ]
-        }
-    ]
-
-    # Dynamically append live scraped items using user cookie
+    # Live crawl (expand each keyword to variants)
     for kw in search_keywords:
-        live_items = live_crawl_facebook_reels(kw, fb_cookie)
-        for live_item in live_items:
-            if live_item["url"] not in [r["url"] for r in real_reels_network]:
-                real_reels_network.append(live_item)
+        for variant in expand_search_keywords(kw):
+            live_items = live_crawl_facebook_reels(variant, fb_cookie, exclude_urls)
+            existing = {r['url'] for r in pool}
+            for item in live_items:
+                if item['url'] not in existing and item['url'] not in exclude_urls:
+                    pool.append(item)
+                    existing.add(item['url'])
 
+    # Build results
     results = []
-    for item in real_reels_network:
-        matched = parse_intent_comments(item["raw_comments"], custom_intent_keywords)
+    seen_result_urls = set()
+    for item in pool:
+        canonical = canonicalize_fb_url(item['url']) or item['url']
+        if canonical in exclude_urls or canonical in seen_result_urls:
+            continue
+        matched = parse_intent_comments(item.get('raw_comments') or [], custom_intent_keywords)
+        # For live items whose comment scrape returned nothing, don't drop them —
+        # surface them with intentCount=0 so the caller can still consider them.
+        # We still respect the user's min_intent threshold.
         if len(matched) >= min_intent:
+            seen_result_urls.add(canonical)
             results.append({
-                "url": item["url"],
-                "tag": item["tag"],
+                "url": canonical,
+                "tag": item.get('tag', ''),
                 "intentCount": len(matched),
-                "intentComments": matched
+                "intentComments": matched,
             })
 
     return jsonify({
@@ -214,9 +435,11 @@ def scan_reels():
         "minIntentCount": min_intent,
         "intentKeywords": custom_intent_keywords,
         "cookieActive": bool(fb_cookie),
+        "excludedCount": len(exclude_urls),
         "totalFound": len(results),
-        "results": results
+        "results": results,
     })
+
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
