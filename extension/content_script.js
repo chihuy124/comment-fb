@@ -126,30 +126,46 @@ async function discoverMode(durationMs) {
 // ---------- SCRAPE MODE (comments on a single Reel) ----------
 
 async function scrapeComments() {
-  console.log('[FB Seeding CS] scrape start on', location.href);
+  const startPath = location.pathname;
+  const startReelId = extractReelId(location.href);
+  console.log('[FB Seeding CS] scrape start on', location.href, 'reelId=', startReelId);
+
   await dismissLoginNags();
 
   // Desktop Reel UI: comments live in a side panel that opens on click.
-  // Force-open the panel before doing anything else.
   await openCommentPanel();
   await sleep(1500);
-
   await switchToAllComments();
 
-  // Scroll the comment panel itself (not the window). Fallback to window scroll.
+  // Only scroll the comment panel itself. NEVER scroll the window in scrape
+  // mode — that advances the vertical Reel feed and mixes comments from
+  // adjacent reels into the DOM.
   const panel = findCommentScrollContainer();
+  if (!panel) {
+    console.warn('[FB Seeding CS] no comment container found — reel likely has 0 comments');
+    // Fall through — collectCommentText will run once and yield whatever is on page.
+  }
   for (let i = 0; i < 8; i++) {
     if (panel) {
       panel.scrollTop = panel.scrollHeight;
-    } else {
-      window.scrollBy(0, 900);
     }
     await sleep(1200);
     await clickMoreCommentsButtons();
+    // Bail early if FB navigated us to a different reel mid-scrape
+    if (extractReelId(location.href) !== startReelId) {
+      console.warn('[FB Seeding CS] URL drifted during scrape, aborting');
+      return [];
+    }
+  }
+
+  // Final invariant check: URL must still be the same reel
+  if (extractReelId(location.href) !== startReelId) {
+    console.warn('[FB Seeding CS] URL drifted before extract, discarding');
+    return [];
   }
 
   const collected = collectCommentText();
-  console.log('[FB Seeding CS] scrape collected', collected.length, 'comment candidates');
+  console.log('[FB Seeding CS] collected', collected.length, 'comment candidates on reel', startReelId);
 
   const seen = new Set();
   const uniq = [];
@@ -160,6 +176,21 @@ async function scrapeComments() {
     }
   }
   return uniq.slice(0, 200);
+}
+
+function extractReelId(href) {
+  try {
+    const u = new URL(href, 'https://www.facebook.com');
+    const m = u.pathname.match(/^\/reels?\/(\d+)/);
+    if (m) return `reel:${m[1]}`;
+    if (u.pathname.startsWith('/watch')) {
+      const v = u.searchParams.get('v');
+      if (v) return `watch:${v}`;
+    }
+    const vm = u.pathname.match(/^\/[^/]+\/videos\/(\d+)/);
+    if (vm) return `video:${vm[1]}`;
+  } catch (e) {}
+  return null;
 }
 
 async function openCommentPanel() {
@@ -193,24 +224,23 @@ async function openCommentPanel() {
 }
 
 function findCommentScrollContainer() {
-  // Heuristic: pick the tallest scrollable div in the viewport that isn't the body.
-  const all = Array.from(document.querySelectorAll('div'));
-  let best = null;
-  let bestScore = 0;
-  for (const el of all) {
+  // Anchor the search on an actual comment node, then walk up until we hit a
+  // scrollable ancestor. This binds the container to the CURRENT reel's
+  // comment panel and never accidentally picks the reel-feed viewport.
+  const anchor = document.querySelector(
+    '[aria-label^="Bình luận"], [aria-label^="Comment by"], [aria-label^="Comment "]'
+  );
+  if (!anchor) return null;
+  let el = anchor.parentElement;
+  while (el && el !== document.body) {
     const cs = getComputedStyle(el);
-    if (!/auto|scroll/.test(cs.overflowY)) continue;
-    const rect = el.getBoundingClientRect();
-    if (rect.height < 200) continue;
-    if (el.scrollHeight <= el.clientHeight + 10) continue; // not actually scrollable
-    const score = rect.height * (rect.width || 1);
-    if (score > bestScore) {
-      bestScore = score;
-      best = el;
+    if (/auto|scroll/.test(cs.overflowY) && el.scrollHeight > el.clientHeight + 10) {
+      console.log('[FB Seeding CS] scroll container: h=', el.scrollHeight, 'client=', el.clientHeight);
+      return el;
     }
+    el = el.parentElement;
   }
-  if (best) console.log('[FB Seeding CS] scroll container found, h=', best.scrollHeight);
-  return best;
+  return null;
 }
 
 async function dismissLoginNags() {
