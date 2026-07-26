@@ -1,36 +1,118 @@
-// Runs on every facebook.com page. If the URL looks like a Reel/Watch/Video
-// permalink AND the page was opened by our background scraper (has our marker
-// in sessionStorage or matches the pattern), we scroll to load comments and
-// send them back.
+// Runs on every facebook.com page. Two modes:
+//   1) DISCOVER mode: URL hash has #seeding=discover → open feed, scroll,
+//      collect every Reel/Watch URL that appears in the DOM.
+//   2) SCRAPE mode: URL is a single Reel/Video permalink → scrape comments.
+// Which mode runs is decided by the URL hash the background service worker
+// sets when creating the tab, plus a fallback based on the pathname.
 
 (async function () {
+  const hash = new URLSearchParams(location.hash.slice(1));
+  const mode = hash.get('seeding');
+
+  if (mode === 'discover') {
+    await discoverMode(parseInt(hash.get('t') || '45000', 10));
+    return;
+  }
+
   const url = location.href;
-  const isTarget =
+  const isSingleReel =
     /facebook\.com\/reels?\/\d+/i.test(url) ||
     /facebook\.com\/watch\/?\?v=\d+/i.test(url) ||
     /facebook\.com\/[^/]+\/videos\/\d+/i.test(url);
 
-  if (!isTarget) return;
-
-  // Wait a beat for React to hydrate
-  await sleep(2000);
-
-  const comments = await scrapeComments();
-  chrome.runtime.sendMessage({ type: 'SCRAPE_RESULT', url, comments });
+  if (isSingleReel) {
+    await sleep(2000);
+    const comments = await scrapeComments();
+    chrome.runtime.sendMessage({ type: 'SCRAPE_RESULT', url, comments });
+  }
 })();
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function scrapeComments() {
-  // Nudge the page: dismiss dialogs, scroll, expand replies
-  await dismissLoginNags();
+// ---------- URL canonicalization ----------
 
-  // Attempt to click "Most relevant" -> "All comments" if present
+function canonicalize(href) {
+  if (!href) return null;
+  try {
+    const u = new URL(href, 'https://www.facebook.com');
+    const path = u.pathname;
+    let m = path.match(/^\/reels?\/(\d{8,})/);
+    if (m) return `https://www.facebook.com/reel/${m[1]}`;
+    if (path.startsWith('/watch')) {
+      const v = u.searchParams.get('v');
+      if (v && /^\d{8,}$/.test(v)) return `https://www.facebook.com/watch/?v=${v}`;
+    }
+    m = path.match(/^\/([^/]+)\/videos\/(\d{8,})/);
+    if (m) return `https://www.facebook.com/${m[1]}/videos/${m[2]}`;
+  } catch (e) {}
+  return null;
+}
+
+// ---------- DISCOVER MODE ----------
+
+async function discoverMode(durationMs) {
+  const foundUrls = new Set();
+  const endTime = Date.now() + durationMs;
+  let lastReport = 0;
+
+  const extract = () => {
+    // Current URL as feed navigates (SPA push-state)
+    const currentCanon = canonicalize(location.href);
+    if (currentCanon) foundUrls.add(currentCanon);
+
+    // Every <a href> on page
+    document.querySelectorAll('a[href]').forEach((a) => {
+      const canon = canonicalize(a.getAttribute('href'));
+      if (canon) foundUrls.add(canon);
+    });
+
+    // Regex the raw HTML — catches React fiber props / lazy-loaded reels
+    // (Bounded to first 500KB to avoid huge DOMs killing perf)
+    const html = document.documentElement.outerHTML.slice(0, 500_000);
+    const reelMatches = html.match(/\/reels?\/(\d{8,})/g) || [];
+    for (const m of reelMatches) {
+      const id = m.replace(/^\/reels?\//, '');
+      foundUrls.add(`https://www.facebook.com/reel/${id}`);
+    }
+    const watchMatches = html.match(/\/watch\/?\?v=(\d{8,})/g) || [];
+    for (const m of watchMatches) {
+      const id = m.match(/(\d{8,})/)[1];
+      foundUrls.add(`https://www.facebook.com/watch/?v=${id}`);
+    }
+  };
+
+  // Initial extract, then scroll / advance / re-extract loop
+  extract();
+
+  while (Date.now() < endTime) {
+    // Two nudges: arrow-down (works on /reel/ vertical feed) + scroll (works on /watch/)
+    try {
+      const evOpts = { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, which: 40, bubbles: true, cancelable: true };
+      (document.activeElement || document.body).dispatchEvent(new KeyboardEvent('keydown', evOpts));
+      window.dispatchEvent(new KeyboardEvent('keydown', evOpts));
+    } catch (e) {}
+    window.scrollBy(0, window.innerHeight * 0.9);
+    await sleep(2200);
+    extract();
+
+    // Progress heartbeat every 5s
+    if (Date.now() - lastReport > 5000) {
+      lastReport = Date.now();
+      chrome.runtime.sendMessage({ type: 'DISCOVER_PROGRESS', count: foundUrls.size });
+    }
+  }
+
+  chrome.runtime.sendMessage({ type: 'DISCOVER_RESULT', urls: Array.from(foundUrls) });
+}
+
+// ---------- SCRAPE MODE (comments on a single Reel) ----------
+
+async function scrapeComments() {
+  await dismissLoginNags();
   await switchToAllComments();
 
-  // Scroll to load more comments
   for (let i = 0; i < 6; i++) {
     window.scrollBy(0, 900);
     await sleep(1200);
@@ -38,8 +120,6 @@ async function scrapeComments() {
   }
 
   const collected = collectCommentText();
-
-  // Dedupe while preserving order
   const seen = new Set();
   const uniq = [];
   for (const c of collected) {
@@ -52,30 +132,18 @@ async function scrapeComments() {
 }
 
 async function dismissLoginNags() {
-  const closeButtons = document.querySelectorAll(
-    'div[aria-label="Close"], div[aria-label="Đóng"]'
-  );
-  closeButtons.forEach((b) => {
+  document.querySelectorAll('div[aria-label="Close"], div[aria-label="Đóng"]').forEach((b) => {
     try { b.click(); } catch (e) {}
   });
   await sleep(300);
 }
 
 async function switchToAllComments() {
-  // Facebook shows "Most relevant" or "Phù hợp nhất" dropdown near comments.
-  // Clicking it and choosing "All comments" reveals more.
-  const filterCandidates = Array.from(
-    document.querySelectorAll('div[role="button"], span')
-  ).filter((el) => {
+  const candidates = Array.from(document.querySelectorAll('div[role="button"], span')).filter((el) => {
     const t = (el.innerText || '').toLowerCase();
-    return (
-      t === 'most relevant' ||
-      t === 'phù hợp nhất' ||
-      t === 'all comments' ||
-      t === 'tất cả bình luận'
-    );
+    return t === 'most relevant' || t === 'phù hợp nhất' || t === 'all comments' || t === 'tất cả bình luận';
   });
-  for (const el of filterCandidates.slice(0, 1)) {
+  for (const el of candidates.slice(0, 1)) {
     try {
       el.click();
       await sleep(700);
@@ -111,55 +179,34 @@ async function clickMoreCommentsButtons() {
 
 function collectCommentText() {
   const out = [];
-
-  // FB comment DOM has evolved. We try multiple strategies and merge.
-  // Strategy 1: articles/comment nodes with role="article" (comments only, not the video post)
   const articles = document.querySelectorAll('div[role="article"]');
   articles.forEach((a) => {
     const label = a.getAttribute('aria-label') || '';
-    // Skip the main post article — its aria-label usually says "Post by ..."
-    if (
-      /^(Post|Bài viết)\b/i.test(label) ||
-      /video by/i.test(label) ||
-      /reel by/i.test(label)
-    ) {
-      return;
-    }
+    if (/^(Post|Bài viết)\b/i.test(label) || /video by/i.test(label) || /reel by/i.test(label)) return;
     const author = extractAuthor(a);
     const text = extractCommentText(a);
-    if (text && text.length >= 2) {
-      out.push(author ? `${author}: ${text}` : text);
-    }
+    if (text && text.length >= 2) out.push(author ? `${author}: ${text}` : text);
   });
-
-  // Strategy 2: fallback — <ul aria-label="Comments"> lists
-  const commentLists = document.querySelectorAll('ul[aria-label*="Comment"], ul[aria-label*="ình luận"]');
-  commentLists.forEach((ul) => {
+  document.querySelectorAll('ul[aria-label*="Comment"], ul[aria-label*="ình luận"]').forEach((ul) => {
     ul.querySelectorAll('li').forEach((li) => {
       const text = extractCommentText(li);
       const author = extractAuthor(li);
-      if (text && text.length >= 2) {
-        out.push(author ? `${author}: ${text}` : text);
-      }
+      if (text && text.length >= 2) out.push(author ? `${author}: ${text}` : text);
     });
   });
-
   return out;
 }
 
 function extractAuthor(node) {
   const link = node.querySelector('a[role="link"] span, a[role="link"] strong');
-  if (link && link.innerText) return link.innerText.trim();
-  return '';
+  return link && link.innerText ? link.innerText.trim() : '';
 }
 
 function extractCommentText(node) {
-  // Comment body usually lives in <div dir="auto"> with actual text
   const candidates = node.querySelectorAll('div[dir="auto"]');
   let longest = '';
   for (const c of candidates) {
     const t = (c.innerText || '').trim();
-    // ignore timestamps, "Like", "Reply", counts
     if (!t) continue;
     if (/^(Like|Thích|Reply|Trả lời|Share|Chia sẻ|\d+[hmd]|\d+ w)$/i.test(t)) continue;
     if (t.length > longest.length) longest = t;

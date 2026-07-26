@@ -39,5 +39,24 @@
         );
       }
     }
+
+    if (msg.type === 'DISCOVER_REELS') {
+      try {
+        const response = await chrome.runtime.sendMessage({
+          type: 'DISCOVER_REELS',
+          durationMs: msg.durationMs || 45000,
+          startUrl: msg.startUrl,
+        });
+        window.postMessage(
+          { source: TAG, type: 'DISCOVER_RESULT', requestId: msg.requestId, response },
+          '*'
+        );
+      } catch (err) {
+        window.postMessage(
+          { source: TAG, type: 'DISCOVER_ERROR', requestId: msg.requestId, error: String(err) },
+          '*'
+        );
+      }
+    }
   });
 })();
