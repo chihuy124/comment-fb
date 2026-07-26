@@ -126,16 +126,31 @@ async function discoverMode(durationMs) {
 // ---------- SCRAPE MODE (comments on a single Reel) ----------
 
 async function scrapeComments() {
+  console.log('[FB Seeding CS] scrape start on', location.href);
   await dismissLoginNags();
+
+  // Desktop Reel UI: comments live in a side panel that opens on click.
+  // Force-open the panel before doing anything else.
+  await openCommentPanel();
+  await sleep(1500);
+
   await switchToAllComments();
 
-  for (let i = 0; i < 6; i++) {
-    window.scrollBy(0, 900);
+  // Scroll the comment panel itself (not the window). Fallback to window scroll.
+  const panel = findCommentScrollContainer();
+  for (let i = 0; i < 8; i++) {
+    if (panel) {
+      panel.scrollTop = panel.scrollHeight;
+    } else {
+      window.scrollBy(0, 900);
+    }
     await sleep(1200);
     await clickMoreCommentsButtons();
   }
 
   const collected = collectCommentText();
+  console.log('[FB Seeding CS] scrape collected', collected.length, 'comment candidates');
+
   const seen = new Set();
   const uniq = [];
   for (const c of collected) {
@@ -145,6 +160,57 @@ async function scrapeComments() {
     }
   }
   return uniq.slice(0, 200);
+}
+
+async function openCommentPanel() {
+  // Look for any button/link whose text or aria-label references comments.
+  // Desktop Reel page has a "Comment" button on the right rail; clicking opens the panel.
+  const nodes = Array.from(document.querySelectorAll(
+    'div[role="button"], a[role="link"], span, [aria-label]'
+  ));
+  const isCommentTrigger = (el) => {
+    const label = (el.getAttribute && el.getAttribute('aria-label') || '').toLowerCase();
+    const text = (el.innerText || '').toLowerCase().trim();
+    return (
+      /^comment$/.test(label) || /^bình luận$/.test(label) ||
+      /^\d+\s*(comment|bình luận)/.test(label) ||
+      /^\d+\s*(comment|bình luận)/.test(text) ||
+      label === 'leave a comment' || label === 'viết bình luận' ||
+      (text.includes('comment') && text.length < 30) ||
+      (text.includes('bình luận') && text.length < 30)
+    );
+  };
+  for (const el of nodes) {
+    if (isCommentTrigger(el)) {
+      try {
+        el.click();
+        console.log('[FB Seeding CS] clicked comment trigger:', el.getAttribute('aria-label') || el.innerText?.slice(0, 40));
+        return;
+      } catch (e) {}
+    }
+  }
+  console.log('[FB Seeding CS] no comment trigger found');
+}
+
+function findCommentScrollContainer() {
+  // Heuristic: pick the tallest scrollable div in the viewport that isn't the body.
+  const all = Array.from(document.querySelectorAll('div'));
+  let best = null;
+  let bestScore = 0;
+  for (const el of all) {
+    const cs = getComputedStyle(el);
+    if (!/auto|scroll/.test(cs.overflowY)) continue;
+    const rect = el.getBoundingClientRect();
+    if (rect.height < 200) continue;
+    if (el.scrollHeight <= el.clientHeight + 10) continue; // not actually scrollable
+    const score = rect.height * (rect.width || 1);
+    if (score > bestScore) {
+      bestScore = score;
+      best = el;
+    }
+  }
+  if (best) console.log('[FB Seeding CS] scroll container found, h=', best.scrollHeight);
+  return best;
 }
 
 async function dismissLoginNags() {
@@ -195,14 +261,29 @@ async function clickMoreCommentsButtons() {
 
 function collectCommentText() {
   const out = [];
-  const articles = document.querySelectorAll('div[role="article"]');
-  articles.forEach((a) => {
+
+  // Strategy 1: role="article" (works on News Feed posts, sometimes on Reel side panel)
+  document.querySelectorAll('div[role="article"]').forEach((a) => {
     const label = a.getAttribute('aria-label') || '';
     if (/^(Post|Bài viết)\b/i.test(label) || /video by/i.test(label) || /reel by/i.test(label)) return;
     const author = extractAuthor(a);
     const text = extractCommentText(a);
     if (text && text.length >= 2) out.push(author ? `${author}: ${text}` : text);
   });
+
+  // Strategy 2: aria-label starting with "Comment by X" — matches individual comment
+  // items on Reel side panel (Facebook's 2024+ Reel UI)
+  document.querySelectorAll('[aria-label]').forEach((el) => {
+    const label = el.getAttribute('aria-label') || '';
+    // "Comment by John Doe" / "Bình luận của John Doe"
+    const m = label.match(/^(?:Comment by|Bình luận (?:của|by))\s+(.+)$/i);
+    if (!m) return;
+    const author = m[1].trim();
+    const text = extractCommentText(el);
+    if (text && text.length >= 2) out.push(`${author}: ${text}`);
+  });
+
+  // Strategy 3: <ul aria-label="Comments"> — legacy
   document.querySelectorAll('ul[aria-label*="Comment"], ul[aria-label*="ình luận"]').forEach((ul) => {
     ul.querySelectorAll('li').forEach((li) => {
       const text = extractCommentText(li);
@@ -210,6 +291,27 @@ function collectCommentText() {
       if (text && text.length >= 2) out.push(author ? `${author}: ${text}` : text);
     });
   });
+
+  // Strategy 4: walk visible dir="auto" nodes inside likely comment container
+  // Filter out video caption / UI chrome by requiring the node to be inside
+  // something with 'comment' or 'bình luận' in an aria-label somewhere up.
+  document.querySelectorAll('div[dir="auto"]').forEach((el) => {
+    const text = (el.innerText || '').trim();
+    if (!text || text.length < 3 || text.length > 400) return;
+    if (/^(Like|Thích|Reply|Trả lời|Share|Chia sẻ|\d+[hmdwy]|\d+ (weeks?|months?|days?|hours?|mins?))$/i.test(text)) return;
+    // Skip if this node's text is already collected via strategies above
+    if (out.some(o => o.endsWith(text))) return;
+    // Verify it's inside a comment-related section
+    let anc = el.parentElement;
+    let inCommentArea = false;
+    for (let i = 0; i < 8 && anc; i++) {
+      const l = (anc.getAttribute('aria-label') || '').toLowerCase();
+      if (l.includes('comment') || l.includes('bình luận')) { inCommentArea = true; break; }
+      anc = anc.parentElement;
+    }
+    if (inCommentArea) out.push(text);
+  });
+
   return out;
 }
 
