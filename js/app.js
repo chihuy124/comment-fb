@@ -63,6 +63,10 @@ document.addEventListener('DOMContentLoaded', () => {
         inputNewIntentKeyword: document.getElementById('input-new-intent-keyword'),
         btnAddIntentKeyword: document.getElementById('btn-add-intent-keyword'),
 
+        // FB Cookie Settings (Tab 4)
+        inputFbCookie: document.getElementById('input-fb-cookie'),
+        btnSaveFbCookie: document.getElementById('btn-save-fb-cookie'),
+
         // Cloud API Settings
         customCloudApiUrl: document.getElementById('custom-cloud-api-url'),
         btnSaveCloudApi: document.getElementById('btn-save-cloud-api'),
@@ -146,10 +150,31 @@ document.addEventListener('DOMContentLoaded', () => {
     function init() {
         bindEvents();
         initPromoLink();
+        initFbCookieSetting();
         initCloudApiSetting();
         renderIntentKeywords();
         renderAll();
         initTheme();
+    }
+
+    function initFbCookieSetting() {
+        const savedCookie = localStorage.getItem('fb_user_cookie') || '';
+        if (elements.inputFbCookie) {
+            elements.inputFbCookie.value = savedCookie;
+        }
+
+        if (elements.btnSaveFbCookie) {
+            elements.btnSaveFbCookie.addEventListener('click', () => {
+                const cookieStr = elements.inputFbCookie.value.trim();
+                if (cookieStr) {
+                    localStorage.setItem('fb_user_cookie', cookieStr);
+                    showToast('Đã lưu Cookie Facebook thành công! Mỗi lượt quét cào live sẽ gắn Cookie này.', 'success');
+                } else {
+                    localStorage.removeItem('fb_user_cookie');
+                    showToast('Đã xóa Cookie Facebook!', 'info');
+                }
+            });
+        }
     }
 
     function initCloudApiSetting() {
@@ -445,13 +470,14 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // --- TAB 5: REEL INTENT SCANNER LOGIC ---
+    // --- TAB 5: REEL INTENT SCANNER LOGIC (Passes FB Cookie if present) ---
     async function handleStartScan() {
         const rawKeywords = elements.scanKeywordInput.value.trim() || 'review phim hay, phim chiếu rạp';
         const minCount = Math.max(1, parseInt(elements.minIntentCount.value) || 1);
+        const fbCookie = localStorage.getItem('fb_user_cookie') || '';
         const apiUrl = getScannerApiUrl();
 
-        showToast(`Đang kết nối Server Cloud (${apiUrl}) cào bài Reels theo từ khóa "${rawKeywords}"...`, 'info');
+        showToast(`Đang kết nối Server (${apiUrl}) cào live Facebook theo từ khóa "${rawKeywords}"...`, 'info');
         elements.btnStartScan.disabled = true;
         elements.btnStartScan.innerHTML = '<span>Đang cào trực tiếp Facebook Reels & phân tích comment...</span>';
 
@@ -462,7 +488,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 body: JSON.stringify({ 
                     keyword: rawKeywords, 
                     min_intent: minCount,
-                    intent_keywords: intentKeywords
+                    intent_keywords: intentKeywords,
+                    fb_cookie: fbCookie
                 })
             });
 

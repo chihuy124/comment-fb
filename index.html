@@ -354,6 +354,21 @@
             <!-- TAB 4: SETTINGS & DATA -->
             <div id="settings-tab" class="tab-content">
                 <div class="settings-grid">
+                    <!-- FB Cookie Configuration Card -->
+                    <div class="card card-panel" style="grid-column: 1 / -1; border: 1px solid var(--accent-blue);">
+                        <div class="card-header">
+                            <h3>🔑 Cấu hình Cookie Facebook (Để cào live 100% không bị chặn)</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="form-group">
+                                <label for="input-fb-cookie">Chuỗi Cookie Facebook của bạn (Bấm F12 trên Facebook ➔ Network/Application ➔ Copy giá trị Cookie):</label>
+                                <textarea id="input-fb-cookie" class="form-control code-font" rows="3" placeholder="Dán chuỗi cookie (ví dụ: datr=...; c_user=1000...; xs=...)..."></textarea>
+                                <small class="form-help">Server sẽ gắn Cookie này vào mỗi lượt quét để vượt rào cản trang Login của Facebook, giúp cào 100% dữ liệu thật!</small>
+                            </div>
+                            <button class="btn btn-primary btn-sm" id="btn-save-fb-cookie">Lưu Cookie Facebook</button>
+                        </div>
+                    </div>
+
                     <div class="card card-panel">
                         <div class="card-header">
                             <h3>Cấu hình Cloud API Scanner Backend</h3>
@@ -429,7 +444,7 @@ https://www.facebook.com/groups/congdongreviewphim/posts/456..."></textarea>
                 </div>
                 <div class="modal-footer">
                     <button class="btn btn-secondary" id="btn-cancel-add-modal">Hủy</button>
-                    <button class="btn btn-primary" id="btn-save-posts">Thêm bài viết vào danh sách</button>
+                    <button class="btn btn-save-posts" id="btn-save-posts">Thêm bài viết vào danh sách</button>
                 </div>
             </div>
         </div>

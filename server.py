@@ -16,7 +16,7 @@ DEFAULT_INTENT_KEYWORDS = [
     'xem tiếp', 'x tiếp', 'tập tiếp', 'trọn bộ', 'chọn bộ', 'tiếp đi'
 ]
 
-HEADERS = {
+BASE_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
     'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
@@ -49,20 +49,24 @@ def parse_intent_comments(comments, custom_intent_keywords=None):
             matched.append(c.strip())
     return matched
 
-def live_crawl_facebook_reels(keyword):
+def live_crawl_facebook_reels(keyword, fb_cookie=None):
     """
-    Live Scraper Function: Attempts to search public Facebook Reels endpoint.
-    Safe fallback if Facebook login wall redirects.
+    Live Scraper Function: Searches public Facebook Reels endpoint.
+    Uses user-provided FB Cookie to bypass login wall and fetch live posts & comments!
     """
     scanned_items = []
+    headers = BASE_HEADERS.copy()
+    if fb_cookie and fb_cookie.strip():
+        headers['Cookie'] = fb_cookie.strip()
+
     try:
         search_url = f"https://mbasic.facebook.com/search/videos/?q={requests.utils.quote(keyword)}"
-        res = requests.get(search_url, headers=HEADERS, timeout=5)
+        res = requests.get(search_url, headers=headers, timeout=8)
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
             for a in soup.find_all('a', href=True):
                 href = a['href']
-                if '/watch/' in href or '/reel/' in href:
+                if '/watch/' in href or '/reel/' in href or 'story.php' in href:
                     clean_url = href.split('&')[0].split('?')[0]
                     if clean_url.startswith('/'):
                         clean_url = 'https://www.facebook.com' + clean_url
@@ -101,7 +105,10 @@ def scan_reels():
     # 3. Parse intent keywords list
     custom_intent_keywords = data.get('intent_keywords', DEFAULT_INTENT_KEYWORDS)
 
-    # Real Facebook Reels Network (100% Real Facebook Links with Real Comments)
+    # 4. Read User-Provided Facebook Cookie
+    fb_cookie = data.get('fb_cookie', '')
+
+    # Real Facebook Reels Network Pool
     real_reels_network = [
         {
             "url": "https://www.facebook.com/reel/1478696500970204",
@@ -179,9 +186,9 @@ def scan_reels():
         }
     ]
 
-    # Add any extra live scraped reels if available
+    # Add live scraped items using user cookie
     for kw in search_keywords:
-        live_items = live_crawl_facebook_reels(kw)
+        live_items = live_crawl_facebook_reels(kw, fb_cookie)
         for live_item in live_items:
             if live_item["url"] not in [r["url"] for r in real_reels_network]:
                 real_reels_network.append(live_item)
@@ -189,7 +196,6 @@ def scan_reels():
     results = []
     for item in real_reels_network:
         matched = parse_intent_comments(item["raw_comments"], custom_intent_keywords)
-        # Check against user min_intent
         if len(matched) >= min_intent:
             results.append({
                 "url": item["url"],
@@ -203,6 +209,7 @@ def scan_reels():
         "searchKeywords": search_keywords,
         "minIntentCount": min_intent,
         "intentKeywords": custom_intent_keywords,
+        "cookieActive": bool(fb_cookie),
         "totalFound": len(results),
         "results": results
     })
