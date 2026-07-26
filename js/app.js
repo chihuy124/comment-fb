@@ -62,6 +62,7 @@ document.addEventListener('DOMContentLoaded', () => {
         intentKeywordsContainer: document.getElementById('intent-keywords-container'),
         inputNewIntentKeyword: document.getElementById('input-new-intent-keyword'),
         btnAddIntentKeyword: document.getElementById('btn-add-intent-keyword'),
+        chkHideCommented: document.getElementById('chk-hide-commented'),
 
         // FB Cookie Settings (Tab 4)
         inputFbCookie: document.getElementById('input-fb-cookie'),
@@ -338,6 +339,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         StorageManager.updatePostStatus(postId, 'COMPLETED');
                         showToast('Đã copy comment kèm link của bạn & Mở bài viết! Nhấn Ctrl+V để dán & đăng.', 'success');
                         renderAll();
+                        renderScannedResults();
                     }).catch(err => {
                         window.open(target.url, '_blank');
                         showToast('Đã mở bài viết Facebook. Vui lòng copy nội dung comment thủ công.', 'info');
@@ -361,6 +363,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 StorageManager.updatePostStatus(postId, 'COMPLETED');
                 showToast('Đã đánh dấu hoàn thành bài viết!', 'success');
                 renderAll();
+                renderScannedResults();
             });
         });
 
@@ -370,6 +373,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 StorageManager.updatePostStatus(postId, 'PENDING');
                 showToast('Đã chuyển bài viết về trạng thái chờ!', 'info');
                 renderAll();
+                renderScannedResults();
             });
         });
     }
@@ -432,6 +436,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     StorageManager.deletePosts([postId]);
                     showToast('Đã xóa bài viết khỏi danh sách.', 'info');
                     renderAll();
+                    renderScannedResults();
                 }
             });
         });
@@ -470,7 +475,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // --- TAB 5: REEL INTENT SCANNER LOGIC (Passes FB Cookie if present) ---
+    // --- TAB 5: REEL INTENT SCANNER LOGIC ---
     async function handleStartScan() {
         const rawKeywords = elements.scanKeywordInput.value.trim() || 'review phim hay, phim chiếu rạp';
         const minCount = Math.max(1, parseInt(elements.minIntentCount.value) || 1);
@@ -576,10 +581,22 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderScannedResults() {
         elements.scannedResultsContainer.innerHTML = '';
 
-        if (scannedItems.length === 0) {
+        const existingPosts = StorageManager.getPosts();
+        const existingUrls = new Set(existingPosts.map(p => p.url));
+        const shouldHideCommented = elements.chkHideCommented ? elements.chkHideCommented.checked : true;
+
+        let displayItems = scannedItems;
+
+        if (shouldHideCommented) {
+            displayItems = scannedItems.filter(item => !existingUrls.has(item.url));
+        }
+
+        if (displayItems.length === 0) {
             elements.scannedResultsContainer.innerHTML = `
                 <div class="empty-state" style="padding:2rem 1rem;">
-                    <p>Không tìm thấy bài Reels nào từ Facebook có đủ số người hỏi theo tiêu chí tối thiểu bạn chọn.</p>
+                    <p>${scannedItems.length > 0 && shouldHideCommented 
+                        ? 'Tất cả các bài Reels quét được đã có trong Bảng Seeding của bạn (Đã ẩn trùng).' 
+                        : 'Không tìm thấy bài Reels nào từ Facebook có đủ số người hỏi theo tiêu chí tối thiểu bạn chọn.'}</p>
                 </div>
             `;
             elements.btnImportScannedAll.disabled = true;
@@ -588,7 +605,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         elements.btnImportScannedAll.disabled = false;
 
-        scannedItems.forEach((item, index) => {
+        displayItems.forEach((item, index) => {
+            const isAlreadyAdded = existingUrls.has(item.url);
             const box = document.createElement('div');
             box.className = 'variant-item';
             box.style.flexDirection = 'column';
@@ -602,7 +620,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     <a href="${escapeHtml(item.url)}" target="_blank" class="post-link-preview">
                         ${truncateUrl(item.url, 45)}
                     </a>
-                    <span class="post-tag-badge" style="background:rgba(239, 68, 68, 0.15); color:var(--accent-red); font-weight:700;">🔥 ${item.intentCount} người comment hỏi</span>
+                    <div style="display:flex; gap:0.4rem; align-items:center;">
+                        ${isAlreadyAdded ? '<span class="post-status-badge status-completed" style="font-size:0.75rem;">✓ Đã có trong Bảng Seeding</span>' : ''}
+                        <span class="post-tag-badge" style="background:rgba(239, 68, 68, 0.15); color:var(--accent-red); font-weight:700;">🔥 ${item.intentCount} người comment hỏi</span>
+                    </div>
                 </div>
                 <div style="font-size:0.82rem; color:var(--text-secondary); background:var(--bg-surface); padding:0.6rem 0.85rem; border-radius:6px; width:100%;">
                     <strong>Các comment bình luận THẬT của người xem:</strong>
@@ -610,9 +631,10 @@ document.addEventListener('DOMContentLoaded', () => {
                         ${item.intentComments.map(c => `<li><code>${escapeHtml(c)}</code></li>`).join('')}
                     </ul>
                 </div>
-                <button class="btn btn-secondary btn-sm btn-import-single-scan" data-index="${index}">
-                    + Đẩy bài này vào Bảng Seeding
-                </button>
+                ${isAlreadyAdded 
+                    ? `<button class="btn btn-secondary btn-sm" disabled style="opacity:0.6;">✓ Đã trong Bảng Seeding</button>`
+                    : `<button class="btn btn-secondary btn-sm btn-import-single-scan" data-index="${index}">+ Đẩy bài này vào Bảng Seeding</button>`
+                }
             `;
 
             elements.scannedResultsContainer.appendChild(box);
@@ -621,11 +643,12 @@ document.addEventListener('DOMContentLoaded', () => {
         document.querySelectorAll('.btn-import-single-scan').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 const idx = parseInt(e.currentTarget.getAttribute('data-index'));
-                const item = scannedItems[idx];
+                const item = displayItems[idx];
                 if (item) {
                     StorageManager.addBulkPosts([item.url], 'PHIM_PROMO', `${item.tag} (🔥 ${item.intentCount} hỏi)`);
                     showToast('Đã đẩy bài Reels này vào Bảng Seeding!', 'success');
                     renderAll();
+                    renderScannedResults();
                 }
             });
         });
@@ -640,6 +663,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 switchTab(targetTab);
             });
         });
+
+        // Toggle Hide Commented Checkbox
+        if (elements.chkHideCommented) {
+            elements.chkHideCommented.addEventListener('change', () => {
+                renderScannedResults();
+            });
+        }
 
         // Intent Keywords Add/Remove
         if (elements.btnAddIntentKeyword) {
@@ -690,6 +720,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             showToast(`Đã thêm thành công ${count} bài viết mục tiêu vào danh sách!`, 'success');
             renderAll();
+            renderScannedResults();
         });
 
         // Search & Filters
@@ -700,11 +731,16 @@ document.addEventListener('DOMContentLoaded', () => {
         // Tab 5 Scanner Events
         elements.btnStartScan.addEventListener('click', handleStartScan);
         elements.btnImportScannedAll.addEventListener('click', () => {
-            if (scannedItems.length === 0) return;
-            const urls = scannedItems.map(i => i.url);
+            const existingPosts = StorageManager.getPosts();
+            const existingUrls = new Set(existingPosts.map(p => p.url));
+            const unhandledItems = scannedItems.filter(item => !existingUrls.has(item.url));
+
+            if (unhandledItems.length === 0) return;
+            const urls = unhandledItems.map(i => i.url);
             StorageManager.addBulkPosts(urls, 'PHIM_PROMO', 'Reels Tiềm Năng 🔥');
-            showToast(`Đã đẩy tất cả ${urls.length} bài Reels tiềm năng vào Bảng Seeding!`, 'success');
+            showToast(`Đã đẩy tất cả ${urls.length} bài Reels tiềm năng mới vào Bảng Seeding!`, 'success');
             renderAll();
+            renderScannedResults();
             switchTab('dashboard-tab');
         });
 
@@ -732,6 +768,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 showToast(`Đã xóa ${idsToDelete.length} bài viết khỏi danh sách.`, 'info');
                 elements.checkAllPosts.checked = false;
                 renderAll();
+                renderScannedResults();
             }
         });
 
@@ -779,6 +816,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         }
                         showToast('Đã nhập thành công dữ liệu từ file sao lưu!', 'success');
                         renderAll();
+                        renderScannedResults();
                     } else {
                         showToast('Định dạng file sao lưu không hợp lệ!', 'warning');
                     }
@@ -796,6 +834,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 elements.inputPromoLink.value = '';
                 showToast('Đã xóa sạch toàn bộ dữ liệu!', 'info');
                 renderAll();
+                renderScannedResults();
             }
         });
     }
