@@ -38,6 +38,8 @@ function ensureKeepAlive() {
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  console.log('[BG] recv', msg?.type, 'from', sender.tab?.id ? `tab=${sender.tab.id}` : (sender.url || 'unknown'));
+
   // Content script asking what to do
   if (msg?.type === 'GET_MISSION' && sender.tab?.id != null) {
     const m = missions.get(sender.tab.id);
@@ -150,13 +152,14 @@ async function scrapeOneUrl(url, timeoutMs) {
 // ---- DISCOVER FLOW ----
 
 async function discoverFromFeed(durationMs, startUrl) {
-  // Default: FB desktop Watch feed. Has most videos + reels mixed.
-  // /reel/ was less reliable — FB often redirects to a specific reel and strips the hash.
   const url = startUrl || 'https://www.facebook.com/watch/';
+  console.log('[BG] discoverFromFeed start, url=', url, 'duration=', durationMs);
   let tab;
   try {
     tab = await chrome.tabs.create({ url, active: false });
+    console.log('[BG] tab created id=', tab.id);
   } catch (e) {
+    console.error('[BG] tab create failed:', e);
     return { ok: false, error: 'tab_create_failed', urls: [] };
   }
   missions.set(tab.id, { mode: 'discover', durationMs });
