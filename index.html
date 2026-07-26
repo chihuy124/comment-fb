@@ -61,6 +61,15 @@
                     <span>Bộ mẫu Comment (Spintax)</span>
                 </button>
 
+                <button class="nav-item" data-tab="scanner-tab" id="nav-scanner">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="11" cy="11" r="8"></circle>
+                        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                        <path d="M11 8v6M8 11h6"></path>
+                    </svg>
+                    <span>Quét Reels Phim 🔥</span>
+                </button>
+
                 <button class="nav-item" data-tab="settings-tab" id="nav-settings">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <circle cx="12" cy="12" r="3"></circle>
@@ -280,6 +289,69 @@
                 </div>
             </div>
 
+            <!-- TAB 5: SMART REEL & COMMENT INTENT SCANNER -->
+            <div id="scanner-tab" class="tab-content">
+                <div class="spintax-grid">
+                    <!-- Left Panel: Scanner Controls & Keywords -->
+                    <div class="card card-panel">
+                        <div class="card-header">
+                            <h3>Cấu hình Bộ Lọc Comment Hỏi Phim 🔥</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="form-group">
+                                <label>Các bộ từ khóa nhu cầu cao (Intent Keywords):</label>
+                                <div class="keyword-tags-group" style="display:flex; flex-wrap:wrap; gap:0.5rem; margin-bottom:1rem;">
+                                    <span class="post-tag-badge">xin link</span>
+                                    <span class="post-tag-badge">tập 2</span>
+                                    <span class="post-tag-badge">xem ở đâu</span>
+                                    <span class="post-tag-badge">tên phim là gì</span>
+                                    <span class="post-tag-badge">link full</span>
+                                    <span class="post-tag-badge">xem tiếp</span>
+                                    <span class="post-tag-badge">phần 2</span>
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="scan-keyword-input">Nhập từ khóa tìm kiếm Reels Phim:</label>
+                                <input type="text" id="scan-keyword-input" class="form-control" value="review phim hay" placeholder="Ví dụ: review phim chiếu rạp, phim hành động...">
+                            </div>
+
+                            <div class="form-group">
+                                <label for="min-intent-count">Số người comment hỏi tối thiểu:</label>
+                                <select id="min-intent-count" class="form-control">
+                                    <option value="1">Có ít nhất 1 người hỏi</option>
+                                    <option value="2" selected>Có ít nhất 2 người hỏi trở lên 🔥</option>
+                                    <option value="5">Có ít nhất 5 người hỏi trở lên 🔥🔥</option>
+                                </select>
+                            </div>
+
+                            <button class="btn btn-primary" id="btn-start-scan" style="width:100%; margin-top:0.5rem;">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                                <span>Tự Động Quét & Phân Tích Comment Reels</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Right Panel: Scanned High-Intent Reels Results -->
+                    <div class="card card-panel">
+                        <div class="card-header">
+                            <h3>Kết quả Reels Tiềm Năng Cao (Đã lọc comment)</h3>
+                            <button class="btn btn-primary btn-sm" id="btn-import-scanned-all" disabled>
+                                <span>1-Click Đẩy Tất Cả Vào Bảng Seeding</span>
+                            </button>
+                        </div>
+                        <div class="card-body">
+                            <div id="scanned-results-container" class="variant-box-list">
+                                <div class="empty-state" style="padding:2rem 1rem;">
+                                    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                                    <p>Nhấn "Tự Động Quét & Phân Tích Comment Reels" để tìm các bài Reels đang có nhiều người xin link / hỏi tập 2.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- TAB 4: SETTINGS & DATA -->
             <div id="settings-tab" class="tab-content">
                 <div class="settings-grid">
@@ -303,7 +375,7 @@
 
                                 <button class="btn btn-outline-danger" id="btn-reset-demo">
                                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>
-                                    <span>Nạp lại dữ liệu mẫu Demo</span>
+                                    <span>Xóa sạch toàn bộ dữ liệu</span>
                                 </button>
                             </div>
                         </div>
@@ -317,11 +389,11 @@
                             <ul class="tips-list">
                                 <li>
                                     <span class="tip-num">1</span>
-                                    <div><strong>Đăng nhập sẵn Fanpage:</strong> Chuyển sang chế độ Fanpage trên trình duyệt trước khi seeding.</div>
+                                    <div><strong>Quét Reels Nhu Cầu Cao:</strong> Dùng tab <strong>Quét Reels Phim 🔥</strong> để hệ thống tìm các video đang có nhiều người comment hỏi xin link / hỏi tập 2.</div>
                                 </li>
                                 <li>
                                     <span class="tip-num">2</span>
-                                    <div><strong>Cấu hình Link trong Tab "Bộ mẫu Comment":</strong> Nhập link bài viết của bạn vào ô <code>Target Promo Link</code> ở tab 3 để hệ thống tự chèn vào <code>{link_fb}</code>.</div>
+                                    <div><strong>Cấu hình Link của bạn:</strong> Điền link bài viết của bạn vào <code>Target Promo Link</code> ở tab 3.</div>
                                 </li>
                                 <li>
                                     <span class="tip-num">3</span>

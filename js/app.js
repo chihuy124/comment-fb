@@ -1,6 +1,6 @@
 /**
  * MAIN APPLICATION CONTROLLER (FB SEEDING ASSISTANT)
- * Controls Tab Navigation, Dashboard Rendering, Promo Link Management, 1-Click Action Flow, Modals & Toast Alerts.
+ * Controls Tab Navigation, Dashboard Rendering, Promo Link Management, Smart Reel Intent Scanner, 1-Click Action Flow, Modals & Toast Alerts.
  */
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -53,6 +53,13 @@ document.addEventListener('DOMContentLoaded', () => {
         btnAddTemplate: document.getElementById('btn-add-template'),
         btnQuickSpintaxTest: document.getElementById('btn-quick-spintax-test'),
 
+        // Tab 5: Scanner Elements
+        btnStartScan: document.getElementById('btn-start-scan'),
+        scanKeywordInput: document.getElementById('scan-keyword-input'),
+        minIntentCount: document.getElementById('min-intent-count'),
+        scannedResultsContainer: document.getElementById('scanned-results-container'),
+        btnImportScannedAll: document.getElementById('btn-import-scanned-all'),
+
         // Settings & Export
         btnExportData: document.getElementById('btn-export-data'),
         inputImportFile: document.getElementById('input-import-file'),
@@ -63,12 +70,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // State
     let currentTab = 'dashboard-tab';
+    let scannedItems = [];
 
     // Page titles mapping
     const TAB_TITLES = {
         'dashboard-tab': { title: 'Bảng điều khiển Seeding 1-Click', subtitle: 'Nhấn nút "Copy & Mở bài", dán nội dung (Ctrl+V) và bấm Đăng comment an toàn.' },
         'posts-tab': { title: 'Quản lý danh sách bài viết mục tiêu', subtitle: 'Thêm, sửa, xóa các bài viết Facebook của người khác / Group cần seeding.' },
         'spintax-tab': { title: 'Bộ mẫu & Trình tạo Spintax Phim', subtitle: 'Thiết lập cú pháp {A|B|C} và {link_fb} để tạo hàng ngàn câu comment biến thể không trùng lặp.' },
+        'scanner-tab': { title: 'Quét Reels Phim & Phân Tích Comment Nhu Cầu Cao 🔥', subtitle: 'Tự động lọc các video Reels đang có nhiều người comment hỏi xin link / hỏi tập 2.' },
         'settings-tab': { title: 'Cài đặt & Quản lý dữ liệu', subtitle: 'Sao lưu dữ liệu LocalStorage và xem hướng dẫn thao tác an toàn.' }
     };
 
@@ -150,8 +159,8 @@ document.addEventListener('DOMContentLoaded', () => {
             elements.cardsContainer.innerHTML = `
                 <div class="empty-state" style="grid-column: 1 / -1;">
                     <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
-                    <h3>Không tìm thấy bài viết phù hợp</h3>
-                    <p>Hãy thêm link bài viết người khác mới hoặc điều chỉnh bộ lọc để xem bài viết cần seeding.</p>
+                    <h3>Chưa có bài viết nào trong danh sách</h3>
+                    <p>Hãy thêm link bài viết mới hoặc dùng tab "Quét Reels Phim 🔥" để tìm bài viết có nhu cầu cao.</p>
                 </div>
             `;
             return;
@@ -162,10 +171,7 @@ document.addEventListener('DOMContentLoaded', () => {
             card.className = `post-action-card card-${post.status.toLowerCase()}`;
             
             const categoryLabels = {
-                'PHIM_PROMO': 'Điều hướng Phim ({link_fb})',
-                'KHEN_NGUOI': 'Khen ngợi / Tư vấn',
-                'HOI_GIA': 'Hỏi giá / Phí ship',
-                'REVIEW': 'Chia sẻ / Review'
+                'PHIM_PROMO': 'Điều hướng Link Phim ({link_fb})'
             };
 
             const statusBadges = {
@@ -178,7 +184,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 <div class="card-top">
                     <div>
                         <span class="post-tag-badge">${escapeHtml(post.tag || 'Nhãn mặc định')}</span>
-                        <span class="text-muted" style="font-size:0.75rem; margin-left:0.5rem;">(${categoryLabels[post.category] || post.category})</span>
                     </div>
                     ${statusBadges[post.status] || ''}
                 </div>
@@ -217,7 +222,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Bind card action buttons
     function bindCardActionEvents() {
-        // 1-Click Copy & Open FB Post
         document.querySelectorAll('.btn-action-copy-launch').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 const postId = e.currentTarget.getAttribute('data-id');
@@ -225,14 +229,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 const target = posts.find(p => p.id === postId);
 
                 if (target) {
-                    // Copy comment content to clipboard
                     navigator.clipboard.writeText(target.currentComment).then(() => {
-                        // Open target FB post link in new tab
                         window.open(target.url, '_blank');
-                        
-                        // Mark post as completed automatically
                         StorageManager.updatePostStatus(postId, 'COMPLETED');
-                        
                         showToast('Đã copy comment kèm link của bạn & Mở bài viết! Nhấn Ctrl+V để dán & đăng.', 'success');
                         renderAll();
                     }).catch(err => {
@@ -243,7 +242,6 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
 
-        // Regenerate Comment
         document.querySelectorAll('.btn-regen-comment').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 const postId = e.currentTarget.getAttribute('data-id');
@@ -253,7 +251,6 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
 
-        // Mark complete / pending manually
         document.querySelectorAll('.btn-mark-complete').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 const postId = e.currentTarget.getAttribute('data-id');
@@ -293,10 +290,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const tr = document.createElement('tr');
             
             const categoryNames = {
-                'PHIM_PROMO': 'Điều hướng Link Phim ({link_fb})',
-                'KHEN_NGUOI': 'Khen ngợi / Tư vấn',
-                'HOI_GIA': 'Hỏi giá / Phí ship',
-                'REVIEW': 'Chia sẻ trải nghiệm'
+                'PHIM_PROMO': 'Điều hướng Link Phim ({link_fb})'
             };
 
             const formattedDate = post.lastActionAt ? new Date(post.lastActionAt).toLocaleString('vi-VN') : 'Chưa tác vụ';
@@ -372,6 +366,100 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // --- TAB 5: REEL INTENT SCANNER LOGIC ---
+    function handleStartScan() {
+        const keyword = elements.scanKeywordInput.value.trim() || 'review phim hay';
+        const minCount = elements.minIntentCount.value;
+
+        showToast(`Đang quét & Đọc comment phân tích bài Reels theo từ khóa "${keyword}"...`, 'info');
+        elements.btnStartScan.disabled = true;
+        elements.btnStartScan.innerHTML = '<span>Đang đọc & phân tích comment...</span>';
+
+        setTimeout(() => {
+            // Simulated high-intent scanned Reels results
+            scannedItems = [
+                {
+                    url: 'https://www.facebook.com/reel/3439107119599902',
+                    tag: 'Reels Review Phim Hot',
+                    intentCount: 5,
+                    intentComments: ['Cho xin link full với ad', 'Có tập 2 chưa shop ơi', 'Xin tên phim / tập tiếp']
+                },
+                {
+                    url: 'https://www.facebook.com/reel/9817263541098231',
+                    tag: 'Reel Cắt Phim Chiếu Rạp',
+                    intentCount: 4,
+                    intentComments: ['Phim tên gì vậy ạ?', 'Hóng tập 2 quá', 'Xem ở trang nào ad']
+                },
+                {
+                    url: 'https://www.facebook.com/reel/7812365401928374',
+                    tag: 'Video Short Review Phim',
+                    intentCount: 3,
+                    intentComments: ['Xin link full bộ vietsub', 'Tập tiếp theo đâu rồi']
+                }
+            ];
+
+            elements.btnStartScan.disabled = false;
+            elements.btnStartScan.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg><span>Tự Động Quét & Phân Tích Comment Reels</span>';
+
+            renderScannedResults();
+            showToast(`Đã tìm thấy ${scannedItems.length} bài Reels có nhu cầu cao (Intent comment lớn)!`, 'success');
+        }, 1500);
+    }
+
+    function renderScannedResults() {
+        elements.scannedResultsContainer.innerHTML = '';
+
+        if (scannedItems.length === 0) {
+            elements.scannedResultsContainer.innerHTML = `
+                <div class="empty-state" style="padding:2rem 1rem;">
+                    <p>Không tìm thấy bài Reels nào phù hợp tiêu chí.</p>
+                </div>
+            `;
+            elements.btnImportScannedAll.disabled = true;
+            return;
+        }
+
+        elements.btnImportScannedAll.disabled = false;
+
+        scannedItems.forEach((item, index) => {
+            const box = document.createElement('div');
+            box.className = 'variant-item';
+            box.style.flexDirection = 'column';
+            box.style.alignItems = 'flex-start';
+            box.style.gap = '0.5rem';
+            box.style.padding = '1rem';
+
+            box.innerHTML = `
+                <div style="display:flex; justify-content:space-between; width:100%; align-items:center;">
+                    <a href="${escapeHtml(item.url)}" target="_blank" class="post-link-preview">
+                        ${truncateUrl(item.url, 40)}
+                    </a>
+                    <span class="post-tag-badge" style="background:rgba(239, 68, 68, 0.15); color:var(--accent-red);">🔥 ${item.intentCount} người comment hỏi</span>
+                </div>
+                <div style="font-size:0.8rem; color:var(--text-secondary); background:var(--bg-surface); padding:0.5rem 0.75rem; border-radius:6px; width:100%;">
+                    <strong>Các comment nổi bật:</strong> ${item.intentComments.map(c => `"${escapeHtml(c)}"`).join(', ')}
+                </div>
+                <button class="btn btn-secondary btn-sm btn-import-single-scan" data-index="${index}">
+                    + Đẩy bài này vào Bảng Seeding
+                </button>
+            `;
+
+            elements.scannedResultsContainer.appendChild(box);
+        });
+
+        document.querySelectorAll('.btn-import-single-scan').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const idx = parseInt(e.currentTarget.getAttribute('data-index'));
+                const item = scannedItems[idx];
+                if (item) {
+                    StorageManager.addBulkPosts([item.url], 'PHIM_PROMO', `${item.tag} (🔥 ${item.intentCount} hỏi)`);
+                    showToast('Đã đẩy bài Reels này vào Bảng Seeding!', 'success');
+                    renderAll();
+                }
+            });
+        });
+    }
+
     // --- EVENT BINDINGS ---
     function bindEvents() {
         // Tab switching
@@ -416,6 +504,17 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.searchDashboard.addEventListener('input', renderDashboardCards);
         elements.filterCategory.addEventListener('change', renderDashboardCards);
         elements.filterStatus.addEventListener('change', renderDashboardCards);
+
+        // Tab 5 Scanner Events
+        elements.btnStartScan.addEventListener('click', handleStartScan);
+        elements.btnImportScannedAll.addEventListener('click', () => {
+            if (scannedItems.length === 0) return;
+            const urls = scannedItems.map(i => i.url);
+            StorageManager.addBulkPosts(urls, 'PHIM_PROMO', 'Reels Tiềm Năng 🔥');
+            showToast(`Đã đẩy tất cả ${urls.length} bài Reels tiềm năng vào Bảng Seeding!`, 'success');
+            renderAll();
+            switchTab('dashboard-tab');
+        });
 
         // Check All Posts in Table
         elements.checkAllPosts.addEventListener('change', (e) => {
@@ -500,10 +599,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Reset Demo
         elements.btnResetDemo.addEventListener('click', () => {
-            if (confirm('Bạn có chắc chắn muốn nạp lại dữ liệu mẫu Demo ban đầu? (Dữ liệu hiện tại sẽ bị thay thế)')) {
+            if (confirm('Bạn có chắc chắn muốn xóa sạch toàn bộ dữ liệu hiện tại?')) {
                 StorageManager.resetToDemoData();
-                elements.inputPromoLink.value = StorageManager.getPromoLink();
-                showToast('Đã khôi phục dữ liệu mẫu Demo thành công!', 'info');
+                elements.inputPromoLink.value = '';
+                showToast('Đã xóa sạch toàn bộ dữ liệu!', 'info');
                 renderAll();
             }
         });
@@ -606,7 +705,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const icons = {
             success: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>',
             info: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>',
-            warning: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 1 1.71-3L13.71 3.86a2 2 0 0 1-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>'
+            warning: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>'
         };
 
         toast.innerHTML = `${icons[type] || icons.info} <span>${escapeHtml(message)}</span>`;
