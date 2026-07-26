@@ -1,8 +1,9 @@
 // Background service worker — orchestrates scraping FB Reel tabs.
-// Web page (comment-fb.*) → page_bridge → chrome.runtime.sendMessage → here → open FB tab → content_script scrapes → back to page.
+// Web page (comment-fb.*) → page_bridge → chrome.runtime.sendMessage → here →
+// open FB tab → content_script asks for mission → runs → reports back.
 
 const DEFAULT_SETTINGS = {
-  concurrent: 3,      // how many FB tabs open at once
+  concurrent: 3,
   perTabTimeoutMs: 45000,
   delayBetweenBatchesMs: 1500,
 };
@@ -12,75 +13,96 @@ async function getSettings() {
   return { ...DEFAULT_SETTINGS, ...(stored.settings || {}) };
 }
 
-// Track ongoing tab scrapes so we can resolve when content script reports back
-const pendingScrapes = new Map(); // tabId -> {resolve, timer}
+// tabId → mission descriptor. Content script queries GET_MISSION with its
+// own sender.tab.id and receives the mode assigned by whoever opened it.
+const missions = new Map();
+// tabId → resolvers for the caller-facing promise
+const pendingScrapes = new Map();
+const pendingDiscovers = new Map();
 
-// Tracks discover-mode tabs
-const pendingDiscovers = new Map(); // tabId -> {resolve, timer}
+// ---- Keep-alive: pinging chrome APIs every 20s keeps the MV3 service worker
+// awake during long-running discover/scrape operations. Only ticks while there
+// is at least one pending mission. ----
+let keepAliveTimer = null;
+function ensureKeepAlive() {
+  if (keepAliveTimer) return;
+  keepAliveTimer = setInterval(() => {
+    if (missions.size === 0 && pendingScrapes.size === 0 && pendingDiscovers.size === 0) {
+      clearInterval(keepAliveTimer);
+      keepAliveTimer = null;
+      return;
+    }
+    // Any chrome API call resets the SW idle timer
+    chrome.runtime.getPlatformInfo(() => {});
+  }, 20000);
+}
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  // Content script asking what to do
+  if (msg?.type === 'GET_MISSION' && sender.tab?.id != null) {
+    const m = missions.get(sender.tab.id);
+    sendResponse(m || { mode: null });
+    return false;
+  }
+
+  // Web app kicks off scraping
   if (msg?.type === 'SCRAPE_URLS') {
     scrapeMany(msg.urls || []).then(sendResponse);
     return true;
   }
+
+  // Content script reports scrape done
   if (msg?.type === 'SCRAPE_RESULT' && sender.tab?.id != null) {
     const p = pendingScrapes.get(sender.tab.id);
     if (p) {
       clearTimeout(p.timer);
       pendingScrapes.delete(sender.tab.id);
+      missions.delete(sender.tab.id);
       p.resolve(msg.comments || []);
       chrome.tabs.remove(sender.tab.id).catch(() => {});
     }
     return false;
   }
+
+  // Web app kicks off feed discovery
   if (msg?.type === 'DISCOVER_REELS') {
     discoverFromFeed(msg.durationMs || 45000, msg.startUrl).then(sendResponse);
     return true;
   }
+
+  // Content script reports discover done
   if (msg?.type === 'DISCOVER_RESULT' && sender.tab?.id != null) {
     const p = pendingDiscovers.get(sender.tab.id);
     if (p) {
       clearTimeout(p.timer);
       pendingDiscovers.delete(sender.tab.id);
+      missions.delete(sender.tab.id);
       p.resolve(msg.urls || []);
       chrome.tabs.remove(sender.tab.id).catch(() => {});
     }
     return false;
   }
+
+  // Heartbeat from content script — keeps SW alive, logged for debug
   if (msg?.type === 'DISCOVER_PROGRESS') {
-    // Just for logging in popup / devtools; safe to ignore
+    if (sender.tab?.id) {
+      console.log(`[BG] progress tab=${sender.tab.id} count=${msg.count} phase=${msg.phase || '-'}`);
+    }
     return false;
   }
+
+  if (msg?.type === 'CS_ERROR') {
+    console.error('[BG] content script error on', msg.url, ':', msg.error);
+    return false;
+  }
+
   if (msg?.type === 'PING') {
     sendResponse({ ok: true, version: chrome.runtime.getManifest().version });
     return false;
   }
 });
 
-async function discoverFromFeed(durationMs, startUrl) {
-  // Default: FB desktop vertical Reel feed. User can also pass /watch/.
-  const base = startUrl || 'https://www.facebook.com/reel/';
-  const url = `${base}#seeding=discover&t=${durationMs}`;
-  let tab;
-  try {
-    tab = await chrome.tabs.create({ url, active: false });
-  } catch (e) {
-    return { ok: false, error: 'tab_create_failed', urls: [] };
-  }
-  return new Promise((resolve) => {
-    // Overall timeout = duration + 20s buffer for load/settle
-    const timer = setTimeout(() => {
-      pendingDiscovers.delete(tab.id);
-      chrome.tabs.remove(tab.id).catch(() => {});
-      resolve({ ok: false, error: 'timeout', urls: [] });
-    }, durationMs + 20000);
-
-    pendingDiscovers.set(tab.id, {
-      resolve: (urls) => resolve({ ok: true, urls }),
-      timer,
-    });
-  });
-}
+// ---- SCRAPE FLOW ----
 
 async function scrapeMany(urls) {
   const settings = await getSettings();
@@ -90,10 +112,7 @@ async function scrapeMany(urls) {
     const batchResults = await Promise.all(
       batch.map((url) => scrapeOneUrl(url, settings.perTabTimeoutMs))
     );
-    batch.forEach((url, idx) => {
-      results[url] = batchResults[idx];
-    });
-    // small pause between batches to reduce FB rate-limit risk
+    batch.forEach((url, idx) => { results[url] = batchResults[idx]; });
     if (i + settings.concurrent < urls.length) {
       await sleep(settings.delayBetweenBatchesMs);
     }
@@ -101,7 +120,7 @@ async function scrapeMany(urls) {
   return { ok: true, results };
 }
 
-function scrapeOneUrl(url, timeoutMs) {
+async function scrapeOneUrl(url, timeoutMs) {
   return new Promise(async (resolve) => {
     let tab;
     try {
@@ -110,14 +129,51 @@ function scrapeOneUrl(url, timeoutMs) {
       resolve({ error: 'tab_create_failed', comments: [] });
       return;
     }
+    // Register mission BEFORE content script can query
+    missions.set(tab.id, { mode: 'scrape' });
+    ensureKeepAlive();
+
     const timer = setTimeout(() => {
       pendingScrapes.delete(tab.id);
+      missions.delete(tab.id);
       chrome.tabs.remove(tab.id).catch(() => {});
       resolve({ error: 'timeout', comments: [] });
     }, timeoutMs);
 
     pendingScrapes.set(tab.id, {
       resolve: (comments) => resolve({ comments }),
+      timer,
+    });
+  });
+}
+
+// ---- DISCOVER FLOW ----
+
+async function discoverFromFeed(durationMs, startUrl) {
+  // Default: FB desktop Watch feed. Has most videos + reels mixed.
+  // /reel/ was less reliable — FB often redirects to a specific reel and strips the hash.
+  const url = startUrl || 'https://www.facebook.com/watch/';
+  let tab;
+  try {
+    tab = await chrome.tabs.create({ url, active: false });
+  } catch (e) {
+    return { ok: false, error: 'tab_create_failed', urls: [] };
+  }
+  missions.set(tab.id, { mode: 'discover', durationMs });
+  ensureKeepAlive();
+
+  return new Promise((resolve) => {
+    // durationMs + generous buffer for tab load + content script GET_MISSION round-trip
+    const timer = setTimeout(() => {
+      pendingDiscovers.delete(tab.id);
+      missions.delete(tab.id);
+      chrome.tabs.remove(tab.id).catch(() => {});
+      console.warn('[BG] discover timeout tab=', tab.id);
+      resolve({ ok: false, error: 'timeout', urls: [] });
+    }, durationMs + 25000);
+
+    pendingDiscovers.set(tab.id, {
+      resolve: (urls) => resolve({ ok: true, urls }),
       timer,
     });
   });

@@ -1,29 +1,38 @@
-// Runs on every facebook.com page. Two modes:
-//   1) DISCOVER mode: URL hash has #seeding=discover → open feed, scroll,
-//      collect every Reel/Watch URL that appears in the DOM.
-//   2) SCRAPE mode: URL is a single Reel/Video permalink → scrape comments.
-// Which mode runs is decided by the URL hash the background service worker
-// sets when creating the tab, plus a fallback based on the pathname.
+// Runs on every facebook.com page. Asks background what its mission is,
+// then acts on it. Two missions:
+//   - 'discover' : scroll feed, collect Reel/Watch URLs, send back
+//   - 'scrape'   : scrape comments on a single Reel/Watch permalink
+// (Previously used URL hash to signal mode; FB's SPA strips the hash via
+// history.replaceState during navigation, so we now query background over
+// chrome.runtime instead.)
 
 (async function () {
-  const hash = new URLSearchParams(location.hash.slice(1));
-  const mode = hash.get('seeding');
+  try {
+    console.log('[FB Seeding CS] loaded on', location.href);
+    // Give the tab a moment to settle so sender.tab.id is stable
+    await sleep(200);
+    const mission = await chrome.runtime.sendMessage({
+      type: 'GET_MISSION',
+      url: location.href,
+    });
+    console.log('[FB Seeding CS] mission =', mission);
+    if (!mission || !mission.mode) return;
 
-  if (mode === 'discover') {
-    await discoverMode(parseInt(hash.get('t') || '45000', 10));
-    return;
-  }
-
-  const url = location.href;
-  const isSingleReel =
-    /facebook\.com\/reels?\/\d+/i.test(url) ||
-    /facebook\.com\/watch\/?\?v=\d+/i.test(url) ||
-    /facebook\.com\/[^/]+\/videos\/\d+/i.test(url);
-
-  if (isSingleReel) {
-    await sleep(2000);
-    const comments = await scrapeComments();
-    chrome.runtime.sendMessage({ type: 'SCRAPE_RESULT', url, comments });
+    if (mission.mode === 'discover') {
+      await discoverMode(mission.durationMs || 45000);
+      return;
+    }
+    if (mission.mode === 'scrape') {
+      await sleep(2000);
+      const comments = await scrapeComments();
+      chrome.runtime.sendMessage({ type: 'SCRAPE_RESULT', url: location.href, comments });
+      return;
+    }
+  } catch (e) {
+    console.error('[FB Seeding CS] top-level error:', e);
+    try {
+      chrome.runtime.sendMessage({ type: 'CS_ERROR', url: location.href, error: String(e) });
+    } catch (_) {}
   }
 })();
 
@@ -53,9 +62,15 @@ function canonicalize(href) {
 // ---------- DISCOVER MODE ----------
 
 async function discoverMode(durationMs) {
+  console.log('[FB Seeding CS] discover mode start, duration =', durationMs);
   const foundUrls = new Set();
   const endTime = Date.now() + durationMs;
   let lastReport = 0;
+
+  // Tell background we started (also keeps SW alive)
+  try {
+    chrome.runtime.sendMessage({ type: 'DISCOVER_PROGRESS', count: 0, phase: 'start' });
+  } catch (_) {}
 
   const extract = () => {
     // Current URL as feed navigates (SPA push-state)
@@ -104,6 +119,7 @@ async function discoverMode(durationMs) {
     }
   }
 
+  console.log('[FB Seeding CS] discover done, urls =', foundUrls.size);
   chrome.runtime.sendMessage({ type: 'DISCOVER_RESULT', urls: Array.from(foundUrls) });
 }
 
