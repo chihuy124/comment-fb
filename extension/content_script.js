@@ -129,14 +129,14 @@ async function scrapeComments() {
   const startReelId = extractReelId(location.href);
   console.log('[FB Seeding CS] scrape start on', location.href, 'reelId=', startReelId);
 
+  // CRITICAL: pin the reel FIRST, before waiting/interacting. Pauses videos
+  // and patches history in both content-script AND page worlds so FB cannot
+  // auto-advance to another reel during our ~15-20s scrape window.
+  const stopAutoAdvance = startAutoPauseLoop(startReelId);
+
   // Give FB Reel viewer time to hydrate before we touch anything
   await sleep(3000);
   await dismissLoginNags();
-
-  // CRITICAL: pause every <video> so FB doesn't auto-advance the vertical
-  // reel feed when the current clip ends. Without this, scrape (~15-20s)
-  // often outlives the video and URL drifts to the next reel.
-  const stopAutoAdvance = startAutoPauseLoop(startReelId);
 
   // Desktop Reel UI: comments live in a side panel that opens on click.
   const opened = await openCommentPanel();
@@ -187,24 +187,8 @@ async function scrapeComments() {
 }
 
 function startAutoPauseLoop(startReelId) {
-  // Pause every <video>. Also patch history.pushState/replaceState so any
-  // JS-driven URL change to a different reel is ignored, keeping DOM +
-  // location stable during scrape.
-  const _push = history.pushState.bind(history);
-  const _replace = history.replaceState.bind(history);
-  const guard = (fn) => function (state, title, url) {
-    if (url) {
-      const target = extractReelId(new URL(url, location.href).href);
-      if (target && target !== startReelId) {
-        console.log('[FB Seeding CS] blocked navigation to', target);
-        return;
-      }
-    }
-    return fn(state, title, url);
-  };
-  history.pushState = guard(_push);
-  history.replaceState = guard(_replace);
-
+  // (a) Pause every <video>. Content script has DOM access so this works
+  //     directly on the same element FB uses.
   const pauseAll = () => {
     document.querySelectorAll('video').forEach((v) => {
       try {
@@ -214,12 +198,61 @@ function startAutoPauseLoop(startReelId) {
     });
   };
   pauseAll();
-  const interval = setInterval(pauseAll, 800);
+  const pauseInterval = setInterval(pauseAll, 400);
+
+  // (b) Inject a <script> into the PAGE WORLD to patch history + override
+  //     HTMLMediaElement.play so FB code can't override our pause. Content
+  //     script's isolated world can't touch FB's own `history` reference,
+  //     so injection is the only way to intercept navigation.
+  const guardScript = document.createElement('script');
+  guardScript.dataset.fbSeedingGuard = '1';
+  guardScript.textContent =
+    '(function(){' +
+    '  var pinned = ' + JSON.stringify(startReelId) + ';' +
+    '  function extractId(href){' +
+    '    try{' +
+    '      var u = new URL(href, location.href);' +
+    '      var m = u.pathname.match(/^\\/reels?\\/(\\d+)/);' +
+    '      if(m) return "reel:"+m[1];' +
+    '      if(u.pathname.indexOf("/watch")===0){' +
+    '        var v=u.searchParams.get("v");' +
+    '        if(v) return "watch:"+v;' +
+    '      }' +
+    '    }catch(e){}' +
+    '    return null;' +
+    '  }' +
+    '  var _push = history.pushState.bind(history);' +
+    '  var _replace = history.replaceState.bind(history);' +
+    '  window.__fbSeedingRestore = {push:_push,replace:_replace};' +
+    '  history.pushState = function(state, title, url){' +
+    '    if(url){var t=extractId(url); if(t && t!==pinned){console.log("[page] blocked pushState to",t); return;}}' +
+    '    return _push(state,title,url);' +
+    '  };' +
+    '  history.replaceState = function(state, title, url){' +
+    '    if(url){var t=extractId(url); if(t && t!==pinned){console.log("[page] blocked replaceState to",t); return;}}' +
+    '    return _replace(state,title,url);' +
+    '  };' +
+    '  var origPlay = HTMLMediaElement.prototype.play;' +
+    '  window.__fbSeedingRestore.play = origPlay;' +
+    '  HTMLMediaElement.prototype.play = function(){ try{this.pause();}catch(e){} return Promise.resolve(); };' +
+    '})();';
+  (document.head || document.documentElement).appendChild(guardScript);
+  guardScript.remove();
 
   return function stop() {
-    clearInterval(interval);
-    history.pushState = _push;
-    history.replaceState = _replace;
+    clearInterval(pauseInterval);
+    const restoreScript = document.createElement('script');
+    restoreScript.textContent =
+      '(function(){' +
+      '  var r = window.__fbSeedingRestore;' +
+      '  if(!r) return;' +
+      '  history.pushState = r.push;' +
+      '  history.replaceState = r.replace;' +
+      '  HTMLMediaElement.prototype.play = r.play;' +
+      '  delete window.__fbSeedingRestore;' +
+      '})();';
+    (document.head || document.documentElement).appendChild(restoreScript);
+    restoreScript.remove();
   };
 }
 
