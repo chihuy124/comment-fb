@@ -133,6 +133,11 @@ async function scrapeComments() {
   await sleep(3000);
   await dismissLoginNags();
 
+  // CRITICAL: pause every <video> so FB doesn't auto-advance the vertical
+  // reel feed when the current clip ends. Without this, scrape (~15-20s)
+  // often outlives the video and URL drifts to the next reel.
+  const stopAutoAdvance = startAutoPauseLoop(startReelId);
+
   // Desktop Reel UI: comments live in a side panel that opens on click.
   const opened = await openCommentPanel();
   console.log('[FB Seeding CS] panel opened =', opened);
@@ -162,10 +167,12 @@ async function scrapeComments() {
   // Final invariant check: URL must still be the same reel
   if (extractReelId(location.href) !== startReelId) {
     console.warn('[FB Seeding CS] URL drifted before extract, discarding');
+    stopAutoAdvance();
     return [];
   }
 
   const collected = collectCommentText();
+  stopAutoAdvance();
   console.log('[FB Seeding CS] collected', collected.length, 'comment candidates on reel', startReelId);
 
   const seen = new Set();
@@ -177,6 +184,43 @@ async function scrapeComments() {
     }
   }
   return uniq.slice(0, 200);
+}
+
+function startAutoPauseLoop(startReelId) {
+  // Pause every <video>. Also patch history.pushState/replaceState so any
+  // JS-driven URL change to a different reel is ignored, keeping DOM +
+  // location stable during scrape.
+  const _push = history.pushState.bind(history);
+  const _replace = history.replaceState.bind(history);
+  const guard = (fn) => function (state, title, url) {
+    if (url) {
+      const target = extractReelId(new URL(url, location.href).href);
+      if (target && target !== startReelId) {
+        console.log('[FB Seeding CS] blocked navigation to', target);
+        return;
+      }
+    }
+    return fn(state, title, url);
+  };
+  history.pushState = guard(_push);
+  history.replaceState = guard(_replace);
+
+  const pauseAll = () => {
+    document.querySelectorAll('video').forEach((v) => {
+      try {
+        if (!v.paused) v.pause();
+        v.muted = true;
+      } catch (e) {}
+    });
+  };
+  pauseAll();
+  const interval = setInterval(pauseAll, 800);
+
+  return function stop() {
+    clearInterval(interval);
+    history.pushState = _push;
+    history.replaceState = _replace;
+  };
 }
 
 function extractReelId(href) {
