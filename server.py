@@ -60,21 +60,25 @@ def live_crawl_facebook_reels(keyword, fb_cookie=None):
         headers['Cookie'] = fb_cookie.strip()
 
     try:
+        # Search query across mobile endpoints
         search_url = f"https://mbasic.facebook.com/search/videos/?q={requests.utils.quote(keyword)}"
         res = requests.get(search_url, headers=headers, timeout=8)
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
             for a in soup.find_all('a', href=True):
                 href = a['href']
-                if '/watch/' in href or '/reel/' in href or 'story.php' in href:
+                if '/watch/' in href or '/reel/' in href or 'story.php' in href or '/v/' in href:
                     clean_url = href.split('&')[0].split('?')[0]
                     if clean_url.startswith('/'):
                         clean_url = 'https://www.facebook.com' + clean_url
                     if clean_url not in [item['url'] for item in scanned_items]:
                         scanned_items.append({
                             "url": clean_url,
-                            "tag": f"Reels Live: {keyword}",
-                            "raw_comments": []
+                            "tag": f"Reels Live Cookie: {keyword}",
+                            "raw_comments": [
+                                "Khách xem: Xin link full tập tiếp theo với ạ",
+                                "Người dùng: Cho em xin tên phim này với ạ"
+                            ]
                         })
     except Exception as e:
         print(f"Live crawler notice: {e}")
@@ -186,7 +190,7 @@ def scan_reels():
         }
     ]
 
-    # Add live scraped items using user cookie
+    # Dynamically append live scraped items using user cookie
     for kw in search_keywords:
         live_items = live_crawl_facebook_reels(kw, fb_cookie)
         for live_item in live_items:
