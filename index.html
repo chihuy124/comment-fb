@@ -341,11 +341,17 @@
 
                     <!-- Right Panel: Scanned High-Intent Reels Results -->
                     <div class="card card-panel">
-                        <div class="card-header">
-                            <h3>Kết quả Reels Tiềm Năng Cao (Đã lọc comment)</h3>
+                        <div class="card-header" style="flex-wrap:wrap; gap:0.5rem;">
+                            <h3 style="flex:1; min-width:200px;">Kết quả Reels Tiềm Năng Cao (Đã lọc comment)</h3>
+                            <button class="btn btn-secondary btn-sm" id="btn-scrape-live-comments" disabled title="Yêu cầu cài extension FB Reel Comment Scraper">
+                                <span>🧩 Cào Comment Thật (qua Extension)</span>
+                            </button>
                             <button class="btn btn-primary btn-sm" id="btn-import-scanned-all" disabled>
                                 <span>1-Click Đẩy Tất Cả Vào Bảng Seeding</span>
                             </button>
+                        </div>
+                        <div id="ext-status-banner" style="padding:0.5rem 1rem; font-size:0.82rem; color:var(--text-muted); border-bottom:1px solid var(--border-color);">
+                            Extension chưa phát hiện. <a href="extension/README.md" target="_blank" style="color:var(--accent-blue);">Cài extension</a> để cào comment thật từ session FB của bạn.
                         </div>
                         <div class="card-body">
                             <div id="scanned-results-container" class="variant-box-list">

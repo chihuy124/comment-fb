@@ -1,0 +1,43 @@
+{
+  "manifest_version": 3,
+  "name": "FB Reel Comment Scraper (Seeding Assistant)",
+  "version": "1.0.0",
+  "description": "Cào comment thật từ Facebook Reels cho công cụ Seeding — dùng session FB đang login của bạn, không cần cookie thủ công.",
+  "permissions": ["tabs", "storage", "scripting"],
+  "host_permissions": [
+    "https://*.facebook.com/*",
+    "https://comment-fb.vercel.app/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://*.facebook.com/*"],
+      "js": ["content_script.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    },
+    {
+      "matches": [
+        "https://comment-fb.vercel.app/*",
+        "http://localhost/*",
+        "http://127.0.0.1/*"
+      ],
+      "js": ["page_bridge.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "FB Reel Comment Scraper"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["page_bridge.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

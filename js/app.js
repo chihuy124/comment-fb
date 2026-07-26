@@ -59,6 +59,8 @@ document.addEventListener('DOMContentLoaded', () => {
         minIntentCount: document.getElementById('min-intent-count'),
         scannedResultsContainer: document.getElementById('scanned-results-container'),
         btnImportScannedAll: document.getElementById('btn-import-scanned-all'),
+        btnScrapeLiveComments: document.getElementById('btn-scrape-live-comments'),
+        extStatusBanner: document.getElementById('ext-status-banner'),
         intentKeywordsContainer: document.getElementById('intent-keywords-container'),
         inputNewIntentKeyword: document.getElementById('input-new-intent-keyword'),
         btnAddIntentKeyword: document.getElementById('btn-add-intent-keyword'),
@@ -84,6 +86,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentTab = 'dashboard-tab';
     let scannedItems = [];
     let intentKeywords = getStoredIntentKeywords();
+    let extensionReady = false;
+    let extensionVersion = null;
 
     function getStoredIntentKeywords() {
         const stored = localStorage.getItem('fb_intent_keywords');
@@ -475,6 +479,122 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // --- EXTENSION BRIDGE ---
+    const EXT_TAG = 'FB_SEEDING_EXT';
+
+    function updateExtensionBanner() {
+        if (!elements.extStatusBanner) return;
+        if (extensionReady) {
+            elements.extStatusBanner.innerHTML = `<span style="color:#22c55e;">✅ Extension đã kết nối (v${extensionVersion || '?'}). Cào comment thật đã sẵn sàng.</span>`;
+            if (elements.btnScrapeLiveComments) {
+                elements.btnScrapeLiveComments.disabled = scannedItems.length === 0;
+                elements.btnScrapeLiveComments.title = 'Cào comment thật từ mỗi Reel qua session FB của bạn';
+            }
+        } else {
+            elements.extStatusBanner.innerHTML = `Extension chưa phát hiện. Xem <a href="extension/README.md" target="_blank" style="color:var(--accent-blue);">hướng dẫn cài</a> để cào comment thật từ session FB.`;
+            if (elements.btnScrapeLiveComments) {
+                elements.btnScrapeLiveComments.disabled = true;
+                elements.btnScrapeLiveComments.title = 'Cần cài Chrome Extension trước';
+            }
+        }
+    }
+
+    window.addEventListener('message', (e) => {
+        if (e.source !== window) return;
+        const msg = e.data;
+        if (!msg || msg.source !== EXT_TAG) return;
+        if (msg.type === 'EXT_READY' || msg.type === 'PONG') {
+            extensionReady = true;
+            extensionVersion = msg.version;
+            updateExtensionBanner();
+        }
+    });
+
+    // Client-side intent matcher — mirrors server's parse_intent_comments.
+    function normalizeText(str) {
+        return (str || '')
+            .toLowerCase()
+            .normalize('NFD')
+            .replace(/[̀-ͯ]/g, '')
+            .trim();
+    }
+    function matchIntent(comments, keywords) {
+        const kws = (keywords && keywords.length ? keywords : intentKeywords).map(normalizeText);
+        const matched = [];
+        (comments || []).forEach(c => {
+            const nc = normalizeText(c);
+            if (kws.some(k => k && nc.includes(k))) matched.push(c.trim());
+        });
+        return matched;
+    }
+
+    function scrapeIdFromRequest() {
+        return `req_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+    }
+
+    // Ask extension to scrape live comments for the current scanned URLs.
+    // Updates scannedItems in-place with real comments + real intentCount.
+    async function scrapeLiveCommentsViaExtension() {
+        if (!extensionReady) {
+            showToast('Chưa cài extension. Mở extension/README.md để làm theo.', 'warning');
+            return;
+        }
+        const urls = scannedItems.map(i => i.url);
+        if (urls.length === 0) return;
+
+        const requestId = scrapeIdFromRequest();
+        elements.btnScrapeLiveComments.disabled = true;
+        elements.btnScrapeLiveComments.innerHTML = `<span>🧩 Đang cào comment ${urls.length} Reel...</span>`;
+        showToast(`Extension bắt đầu cào ${urls.length} Reel. Có thể mất 1-3 phút tùy số lượng.`, 'info');
+
+        const done = new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('extension_timeout')), 5 * 60 * 1000);
+            const listener = (e) => {
+                if (e.source !== window) return;
+                const msg = e.data;
+                if (!msg || msg.source !== EXT_TAG || msg.requestId !== requestId) return;
+                if (msg.type === 'SCRAPE_RESULT') {
+                    clearTimeout(timeout);
+                    window.removeEventListener('message', listener);
+                    resolve(msg.response);
+                } else if (msg.type === 'SCRAPE_ERROR') {
+                    clearTimeout(timeout);
+                    window.removeEventListener('message', listener);
+                    reject(new Error(msg.error));
+                }
+            };
+            window.addEventListener('message', listener);
+        });
+
+        window.postMessage({ source: EXT_TAG, type: 'SCRAPE_URLS', requestId, urls }, '*');
+
+        try {
+            const response = await done;
+            const results = response?.results || {};
+            let updatedCount = 0;
+            let matchedTotal = 0;
+            scannedItems.forEach(item => {
+                const r = results[item.url];
+                if (r && Array.isArray(r.comments) && r.comments.length) {
+                    const matched = matchIntent(r.comments, intentKeywords);
+                    item.intentComments = matched.length ? matched : r.comments.slice(0, 5);
+                    item.intentCount = matched.length;
+                    item.source = 'live_extension';
+                    updatedCount++;
+                    matchedTotal += matched.length;
+                }
+            });
+            showToast(`Đã cào xong: cập nhật ${updatedCount}/${urls.length} Reel với ${matchedTotal} comment intent thật.`, 'success');
+            renderScannedResults();
+        } catch (err) {
+            console.error(err);
+            showToast(`Lỗi khi cào comment qua extension: ${err.message}`, 'warning');
+        } finally {
+            elements.btnScrapeLiveComments.disabled = false;
+            elements.btnScrapeLiveComments.innerHTML = '<span>🧩 Cào Comment Thật (qua Extension)</span>';
+        }
+    }
+
     // --- TAB 5: REEL INTENT SCANNER LOGIC ---
     async function handleStartScan() {
         const rawKeywords = elements.scanKeywordInput.value.trim() || 'review phim hay, phim chiếu rạp';
@@ -584,6 +704,7 @@ document.addEventListener('DOMContentLoaded', () => {
             elements.btnStartScan.disabled = false;
             elements.btnStartScan.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg><span>Tự Động Quét & Phân Tích Comment Reels</span>';
             renderScannedResults();
+            updateExtensionBanner();
         }
     }
 
@@ -741,6 +862,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Tab 5 Scanner Events
         elements.btnStartScan.addEventListener('click', handleStartScan);
+        if (elements.btnScrapeLiveComments) {
+            elements.btnScrapeLiveComments.addEventListener('click', scrapeLiveCommentsViaExtension);
+        }
+        // Extension might inject before or after our listener — ping proactively
+        setTimeout(() => {
+            window.postMessage({ source: EXT_TAG, type: 'PING', requestId: 'init' }, '*');
+        }, 500);
+        updateExtensionBanner();
         elements.btnImportScannedAll.addEventListener('click', () => {
             const existingPosts = StorageManager.getPosts();
             const existingUrls = new Set(existingPosts.map(p => p.url));
