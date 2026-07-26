@@ -221,42 +221,66 @@ async function dismissLoginNags() {
 }
 
 async function switchToAllComments() {
-  const candidates = Array.from(document.querySelectorAll('div[role="button"], span')).filter((el) => {
-    const t = (el.innerText || '').toLowerCase();
-    return t === 'most relevant' || t === 'phù hợp nhất' || t === 'all comments' || t === 'tất cả bình luận';
+  // Sort dropdown label is usually "Phù hợp nhất" (default) or "Most relevant".
+  // Click it, then pick "Tất cả bình luận" from the menu that appears.
+  // Match with startsWith because FB sometimes appends aria hints to the label.
+  const triggerCandidates = Array.from(document.querySelectorAll(
+    'div[role="button"], span, [aria-label]'
+  )).filter((el) => {
+    const t = (el.innerText || '').trim().toLowerCase();
+    const l = (el.getAttribute && el.getAttribute('aria-label') || '').toLowerCase();
+    return (
+      t === 'most relevant' || t === 'phù hợp nhất' ||
+      l.startsWith('most relevant') || l.startsWith('phù hợp nhất') ||
+      l.includes('sort comments') || l.includes('sắp xếp bình luận')
+    );
   });
-  for (const el of candidates.slice(0, 1)) {
+
+  for (const el of triggerCandidates.slice(0, 2)) {
     try {
       el.click();
-      await sleep(700);
-      const menuOpts = Array.from(document.querySelectorAll('div[role="menuitem"], span'));
+      await sleep(900);
+      const menuOpts = Array.from(document.querySelectorAll(
+        'div[role="menuitem"], div[role="menuitemcheckbox"], div[role="menuitemradio"], span'
+      ));
       const all = menuOpts.find((m) => {
-        const t = (m.innerText || '').toLowerCase();
-        return t === 'all comments' || t === 'tất cả bình luận';
+        const t = (m.innerText || '').trim().toLowerCase();
+        return t.startsWith('tất cả bình luận') || t.startsWith('all comments');
       });
       if (all) {
+        console.log('[FB Seeding CS] switching to All Comments');
         all.click();
-        await sleep(1200);
+        await sleep(1500);
+        return;
       }
     } catch (e) {}
   }
 }
 
 async function clickMoreCommentsButtons() {
-  const btns = Array.from(document.querySelectorAll('div[role="button"], span'));
-  for (const b of btns) {
+  // Click every "Xem thêm bình luận" / "View more comments" button visible.
+  // Note: FB shows this as a link inside the comment panel. Sometimes the
+  // clickable target is a span; sometimes a parent div[role="button"].
+  const nodes = Array.from(document.querySelectorAll(
+    'div[role="button"], span, a[role="button"], div[role="link"]'
+  ));
+  let clicked = 0;
+  for (const b of nodes) {
     const t = (b.innerText || '').trim().toLowerCase();
+    if (!t) continue;
     if (
       t.startsWith('view more comments') ||
       t.startsWith('xem thêm bình luận') ||
       t.startsWith('xem thêm phản hồi') ||
+      t.startsWith('view more replies') ||
       t.startsWith('view previous') ||
       t.startsWith('xem trước')
     ) {
-      try { b.click(); } catch (e) {}
+      try { b.click(); clicked++; } catch (e) {}
     }
   }
-  await sleep(600);
+  if (clicked > 0) console.log('[FB Seeding CS] clicked', clicked, 'more-comments buttons');
+  await sleep(700);
 }
 
 function collectCommentText() {
@@ -271,14 +295,17 @@ function collectCommentText() {
     if (text && text.length >= 2) out.push(author ? `${author}: ${text}` : text);
   });
 
-  // Strategy 2: aria-label starting with "Comment by X" — matches individual comment
-  // items on Reel side panel (Facebook's 2024+ Reel UI)
+  // Strategy 2: aria-label pattern for individual comment nodes (FB 2024+ Reel panel).
+  // English: "Comment by John Doe"
+  // Vietnamese: "Bình luận dưới tên Anh Nhi vào 13 giờ trước"
+  //             "Bình luận của Anh Nhi"
+  const COMMENT_LABEL_RE = /^(?:Comment by\s+(.+?)|Bình luận (?:của|by|dưới tên)\s+(.+?))(?:\s+(?:vào|on|·|,)\s+.*)?$/i;
   document.querySelectorAll('[aria-label]').forEach((el) => {
     const label = el.getAttribute('aria-label') || '';
-    // "Comment by John Doe" / "Bình luận của John Doe"
-    const m = label.match(/^(?:Comment by|Bình luận (?:của|by))\s+(.+)$/i);
+    const m = label.match(COMMENT_LABEL_RE);
     if (!m) return;
-    const author = m[1].trim();
+    const author = (m[1] || m[2] || '').trim();
+    if (!author) return;
     const text = extractCommentText(el);
     if (text && text.length >= 2) out.push(`${author}: ${text}`);
   });
