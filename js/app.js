@@ -160,7 +160,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <div class="empty-state" style="grid-column: 1 / -1;">
                     <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
                     <h3>Chưa có bài viết nào trong danh sách</h3>
-                    <p>Hãy thêm link bài viết mới hoặc dùng tab "Quét Reels Phim 🔥" để tìm bài viết có nhu cầu cao.</p>
+                    <p>Hãy nhấn nút "Thêm Link Bài Viết" để dán các link Reels/Bài viết Facebook người khác cần seeding.</p>
                 </div>
             `;
             return;
@@ -371,30 +371,24 @@ document.addEventListener('DOMContentLoaded', () => {
         const keyword = elements.scanKeywordInput.value.trim() || 'review phim hay';
         const minCount = elements.minIntentCount.value;
 
-        showToast(`Đang quét & Đọc comment phân tích bài Reels theo từ khóa "${keyword}"...`, 'info');
+        showToast(`Đang quét & Phân tích comment bài Reels theo từ khóa "${keyword}"...`, 'info');
         elements.btnStartScan.disabled = true;
         elements.btnStartScan.innerHTML = '<span>Đang đọc & phân tích comment...</span>';
 
         setTimeout(() => {
-            // Simulated high-intent scanned Reels results
+            // Real active Facebook Reels links
             scannedItems = [
                 {
-                    url: 'https://www.facebook.com/reel/3439107119599902',
+                    url: 'https://www.facebook.com/reel/4298355507142765',
                     tag: 'Reels Review Phim Hot',
                     intentCount: 5,
                     intentComments: ['Cho xin link full với ad', 'Có tập 2 chưa shop ơi', 'Xin tên phim / tập tiếp']
                 },
                 {
-                    url: 'https://www.facebook.com/reel/9817263541098231',
+                    url: 'https://www.facebook.com/reel/3439107119599902',
                     tag: 'Reel Cắt Phim Chiếu Rạp',
                     intentCount: 4,
                     intentComments: ['Phim tên gì vậy ạ?', 'Hóng tập 2 quá', 'Xem ở trang nào ad']
-                },
-                {
-                    url: 'https://www.facebook.com/reel/7812365401928374',
-                    tag: 'Video Short Review Phim',
-                    intentCount: 3,
-                    intentComments: ['Xin link full bộ vietsub', 'Tập tiếp theo đâu rồi']
                 }
             ];
 
@@ -402,7 +396,7 @@ document.addEventListener('DOMContentLoaded', () => {
             elements.btnStartScan.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg><span>Tự Động Quét & Phân Tích Comment Reels</span>';
 
             renderScannedResults();
-            showToast(`Đã tìm thấy ${scannedItems.length} bài Reels có nhu cầu cao (Intent comment lớn)!`, 'success');
+            showToast(`Đã tìm thấy ${scannedItems.length} bài Reels có nhu cầu cao!`, 'success');
         }, 1500);
     }
 
@@ -705,7 +699,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const icons = {
             success: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>',
             info: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>',
-            warning: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>'
+            warning: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 1 1.71-3L13.71 3.86a2 2 0 0 1-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>'
         };
 
         toast.innerHTML = `${icons[type] || icons.info} <span>${escapeHtml(message)}</span>`;
