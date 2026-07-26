@@ -631,6 +631,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     </a>
                     <div style="display:flex; gap:0.4rem; align-items:center;">
                         ${isAlreadyAdded ? '<span class="post-status-badge status-completed" style="font-size:0.75rem;">✓ Đã có trong Bảng Seeding</span>' : ''}
+                        ${item.source === 'search_engine' ? '<span class="post-tag-badge" style="background:rgba(59,130,246,0.15); color:#3b82f6; font-size:0.7rem;">🔎 Google/Bing</span>' : ''}
+                        ${item.source === 'live' ? '<span class="post-tag-badge" style="background:rgba(34,197,94,0.15); color:#22c55e; font-size:0.7rem;">📡 Live FB</span>' : ''}
                         <span class="post-tag-badge" style="background:rgba(239, 68, 68, 0.15); color:var(--accent-red); font-weight:700;">🔥 ${item.intentCount} người comment hỏi</span>
                     </div>
                 </div>

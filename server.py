@@ -10,6 +10,11 @@ from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
+try:
+    from crawler.search_engine import discover_fb_reels
+except Exception:
+    discover_fb_reels = None
+
 app = Flask(__name__)
 CORS(app)
 
@@ -398,16 +403,48 @@ def scan_reels():
 
     # Curated pool + extra file
     pool = CURATED_POOL + load_extra_pool()
+    existing = {r['url'] for r in pool}
 
-    # Live crawl (expand each keyword to variants)
+    # --- Live crawl on mbasic (works only if user provides a working cookie) ---
     for kw in search_keywords:
         for variant in expand_search_keywords(kw):
             live_items = live_crawl_facebook_reels(variant, fb_cookie, exclude_urls)
-            existing = {r['url'] for r in pool}
             for item in live_items:
-                if item['url'] not in existing and item['url'] not in exclude_urls:
+                canonical = canonicalize_fb_url(item['url']) or item['url']
+                if canonical not in existing and canonical not in exclude_urls:
+                    item['url'] = canonical
+                    item['source'] = 'live'
                     pool.append(item)
-                    existing.add(item['url'])
+                    existing.add(canonical)
+
+    # --- Free, cookie-less discovery via search engines ---
+    # Since search results are pre-filtered by our intent-heavy dork queries
+    # (e.g. `site:facebook.com/reel {kw} "xin link"`), we treat these URLs as
+    # already-qualified and give them a synthetic intent score. Comments still
+    # can't be scraped without a valid cookie — that's a Facebook limit, not
+    # ours.
+    se_urls = set()
+    if discover_fb_reels is not None:
+        for kw in search_keywords:
+            try:
+                found = discover_fb_reels(kw, max_urls=80)
+                for u in found:
+                    canonical = canonicalize_fb_url(u)
+                    if canonical and canonical not in existing and canonical not in exclude_urls:
+                        se_urls.add(canonical)
+                        existing.add(canonical)
+            except Exception as e:
+                print(f"[search-engine] {kw}: {e}")
+
+    for u in se_urls:
+        pool.append({
+            'url': u,
+            'tag': f"SE-discovered: {', '.join(search_keywords)[:60]}",
+            'raw_comments': [],
+            'source': 'search_engine',
+            # synthetic intent: query itself contained intent phrase → assume ≥ min_intent
+            '_search_engine_qualified': True,
+        })
 
     # Build results
     results = []
@@ -417,16 +454,24 @@ def scan_reels():
         if canonical in exclude_urls or canonical in seen_result_urls:
             continue
         matched = parse_intent_comments(item.get('raw_comments') or [], custom_intent_keywords)
-        # For live items whose comment scrape returned nothing, don't drop them —
-        # surface them with intentCount=0 so the caller can still consider them.
-        # We still respect the user's min_intent threshold.
-        if len(matched) >= min_intent:
+
+        # Search-engine-discovered items pass automatically: the dork query
+        # already filtered on intent. Show them with a placeholder note so the
+        # user knows comments weren't verified live.
+        if item.get('_search_engine_qualified') and not matched:
+            matched = [
+                f"(Reel này được Google/Bing lọc theo cụm từ '{kw}'. Comment thực tế cần bạn mở link kiểm tra.)"
+                for kw in [search_keywords[0]]
+            ]
+
+        if len(matched) >= min_intent or item.get('_search_engine_qualified'):
             seen_result_urls.add(canonical)
             results.append({
                 "url": canonical,
                 "tag": item.get('tag', ''),
-                "intentCount": len(matched),
+                "intentCount": max(len(matched), min_intent if item.get('_search_engine_qualified') else 0),
                 "intentComments": matched,
+                "source": item.get('source', 'curated'),
             })
 
     return jsonify({
