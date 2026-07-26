@@ -21,7 +21,12 @@ class StorageManager {
      * @returns {string}
      */
     static getPromoLink() {
-        return localStorage.getItem(STORAGE_KEYS.PROMO_LINK) || DEFAULT_PROMO_LINK;
+        const link = localStorage.getItem(STORAGE_KEYS.PROMO_LINK) || DEFAULT_PROMO_LINK;
+        if (link.includes('MoviePostExample')) {
+            localStorage.removeItem(STORAGE_KEYS.PROMO_LINK);
+            return '';
+        }
+        return link;
     }
 
     /**
@@ -37,20 +42,28 @@ class StorageManager {
     }
 
     /**
-     * Gets all posts from LocalStorage, or initializes with empty array if clean
+     * Gets all posts from LocalStorage, cleaning up any legacy mock data automatically
      * @returns {Array}
      */
     static getPosts() {
         try {
             const data = localStorage.getItem(STORAGE_KEYS.POSTS);
             if (!data) {
-                this.savePosts(INITIAL_SAMPLE_POSTS);
-                return INITIAL_SAMPLE_POSTS;
+                this.savePosts([]);
+                return [];
             }
-            return JSON.parse(data);
+            let posts = JSON.parse(data);
+            
+            // Clean up any remaining legacy mock demo posts
+            const filteredPosts = posts.filter(p => p.id && !p.id.startsWith('post_demo'));
+            if (filteredPosts.length !== posts.length) {
+                this.savePosts(filteredPosts);
+                return filteredPosts;
+            }
+            return posts;
         } catch (e) {
             console.error('Error reading posts from LocalStorage:', e);
-            return INITIAL_SAMPLE_POSTS;
+            return [];
         }
     }
 
@@ -181,12 +194,13 @@ class StorageManager {
     }
 
     /**
-     * Resets data back to clean state
+     * Resets data back to completely clean state
      */
     static resetToDemoData() {
         this.savePosts([]);
         this.saveTemplates(window.DEFAULT_TEMPLATES || []);
         this.savePromoLink('');
+        localStorage.clear();
     }
 }
 
