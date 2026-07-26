@@ -786,6 +786,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderScannedResults() {
+        // Refresh Discover/Scrape button state — scrape needs scannedItems > 0
+        if (typeof updateExtensionBanner === 'function') updateExtensionBanner();
+
         elements.scannedResultsContainer.innerHTML = '';
 
         const existingPosts = StorageManager.getPosts();
