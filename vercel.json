@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "name": "fb-seeding-assistant",
+  "cleanUrls": true,
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "/$1"
+    }
+  ]
+}

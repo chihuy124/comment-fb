@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FB Seeding Assistant - Công cụ hỗ trợ Seeding Facebook bán tự động</title>
+    <meta name="description" content="Ứng dụng hỗ trợ quản lý danh sách bài viết Facebook, tự động tạo nội dung comment đa dạng tránh spam và quy trình 1-click Copy & Mở tab an toàn.">
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body class="dark-theme">
+    <!-- Main App Container -->
+    <div id="app" class="app-container">
+        <!-- Sidebar / Navigation -->
+        <aside class="sidebar">
+            <div class="brand">
+                <div class="brand-icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"></path>
+                    </svg>
+                </div>
+                <div class="brand-text">
+                    <h2>FB Assistant</h2>
+                    <span class="badge badge-pro">Seeding Tool</span>
+                </div>
+            </div>
+
+            <nav class="nav-menu">
+                <button class="nav-item active" data-tab="dashboard-tab" id="nav-dashboard">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="3" width="7" height="9"></rect>
+                        <rect x="14" y="3" width="7" height="5"></rect>
+                        <rect x="14" y="12" width="7" height="9"></rect>
+                        <rect x="3" y="16" width="7" height="5"></rect>
+                    </svg>
+                    <span>Bảng Seeding (1-Click)</span>
+                </button>
+
+                <button class="nav-item" data-tab="posts-tab" id="nav-posts">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                        <polyline points="14 2 14 8 20 8"></polyline>
+                        <line x1="16" y1="13" x2="8" y2="13"></line>
+                        <line x1="16" y1="17" x2="8" y2="17"></line>
+                        <polyline points="10 9 9 9 8 9"></polyline>
+                    </svg>
+                    <span>Danh sách bài viết</span>
+                    <span class="nav-badge" id="total-posts-count">0</span>
+                </button>
+
+                <button class="nav-item" data-tab="spintax-tab" id="nav-spintax">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                        <path d="M8 10h.01"></path>
+                        <path d="M12 10h.01"></path>
+                        <path d="M16 10h.01"></path>
+                    </svg>
+                    <span>Bộ mẫu Comment (Spintax)</span>
+                </button>
+
+                <button class="nav-item" data-tab="settings-tab" id="nav-settings">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="3"></circle>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                    </svg>
+                    <span>Cài đặt & Dữ liệu</span>
+                </button>
+            </nav>
+
+            <div class="sidebar-footer">
+                <div class="theme-toggle">
+                    <span class="theme-label">Giao diện tối</span>
+                    <label class="switch">
+                        <input type="checkbox" id="theme-switch" checked>
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+                <div class="status-indicator">
+                    <span class="pulse-dot"></span>
+                    <span>An toàn 100% (No API)</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- Header Bar -->
+            <header class="top-header">
+                <div class="header-title">
+                    <h1 id="page-title">Bảng điều khiển Seeding 1-Click</h1>
+                    <p id="page-subtitle">Nhấn nút "Copy & Mở bài", dán nội dung (Ctrl+V) và bấm Đăng comment an toàn.</p>
+                </div>
+
+                <div class="header-actions">
+                    <button class="btn btn-secondary" id="btn-quick-spintax-test">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+                        <span>Test Spintax</span>
+                    </button>
+                    <button class="btn btn-primary" id="btn-open-add-modal">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                        <span>Thêm Link Bài Viết</span>
+                    </button>
+                </div>
+            </header>
+
+            <!-- Stats Bar -->
+            <section class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-icon icon-blue">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-label">Tổng bài viết</span>
+                        <h3 class="stat-value" id="stat-total">0</h3>
+                    </div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-icon icon-yellow">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 16 14"></polyline></svg>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-label">Đang chờ comment</span>
+                        <h3 class="stat-value" id="stat-pending">0</h3>
+                    </div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-icon icon-green">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-label">Đã comment thành công</span>
+                        <h3 class="stat-value" id="stat-completed">0</h3>
+                    </div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-icon icon-purple">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-label">Tỷ lệ hoàn thành</span>
+                        <h3 class="stat-value" id="stat-rate">0%</h3>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 1: DASHBOARD (Seeding 1-Click Cards) -->
+            <div id="dashboard-tab" class="tab-content active">
+                <div class="filter-bar">
+                    <div class="search-box">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                        <input type="text" id="search-dashboard" placeholder="Tìm kiếm bài viết, ghi chú...">
+                    </div>
+                    
+                    <div class="filter-group">
+                        <select id="filter-category" class="select-control">
+                            <option value="ALL">Tất cả kịch bản</option>
+                            <option value="PHIM_PROMO" selected>Điều hướng Link Phim ({link_fb})</option>
+                            <option value="KHEN_NGUOI">Khen ngợi / Tư vấn</option>
+                            <option value="HOI_GIA">Hỏi giá / Phí ship</option>
+                            <option value="REVIEW">Chia sẻ trải nghiệm</option>
+                        </select>
+
+                        <select id="filter-status" class="select-control">
+                            <option value="PENDING">Chờ comment</option>
+                            <option value="ALL">Tất cả trạng thái</option>
+                            <option value="COMPLETED">Đã xong</option>
+                            <option value="SKIPPED">Đã bỏ qua</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Action Cards Grid -->
+                <div class="dashboard-cards-grid" id="cards-container">
+                    <!-- Cards will be populated dynamically -->
+                </div>
+            </div>
+
+            <!-- TAB 2: POST MANAGEMENT -->
+            <div id="posts-tab" class="tab-content">
+                <div class="table-card">
+                    <div class="table-header">
+                        <h3>Danh sách bài viết mục tiêu (Bài của người khác/Group)</h3>
+                        <div class="table-actions">
+                            <button class="btn btn-secondary btn-sm" id="btn-select-all">Chọn tất cả</button>
+                            <button class="btn btn-danger btn-sm" id="btn-delete-selected" disabled>Xóa bài đã chọn</button>
+                        </div>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th width="40"><input type="checkbox" id="check-all-posts"></th>
+                                    <th>Link bài viết người khác</th>
+                                    <th>Ghi chú / Nhãn</th>
+                                    <th>Kịch bản Comment</th>
+                                    <th>Trạng thái</th>
+                                    <th>Lần cuối tác vụ</th>
+                                    <th width="120">Hành động</th>
+                                </tr>
+                            </thead>
+                            <tbody id="posts-table-body">
+                                <!-- Data rows inserted dynamically -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB 3: SPINTAX & TEMPLATES -->
+            <div id="spintax-tab" class="tab-content">
+                <!-- PROMO LINK CARD (Chỉ hiển thị trong Tab 3: Bộ mẫu Comment) -->
+                <section class="promo-link-card">
+                    <div class="promo-card-icon">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
+                    </div>
+                    <div class="promo-card-content">
+                        <div class="promo-card-header">
+                            <label for="input-promo-link">Link Facebook Bài Viết Của Bạn (Tự động thay thế biến <code>{link_fb}</code> trong comment):</label>
+                            <span class="badge badge-pro">Target Promo Link</span>
+                        </div>
+                        <div class="promo-input-group">
+                            <input type="text" id="input-promo-link" class="form-control code-font" placeholder="Dán link bài viết Facebook của bạn tại đây (ví dụ: https://www.facebook.com/your-page/posts/123456)...">
+                            <button class="btn btn-primary" id="btn-save-promo-link">Lưu Link</button>
+                        </div>
+                    </div>
+                </section>
+
+                <div class="spintax-grid">
+                    <!-- Left Column: Template Manager -->
+                    <div class="card card-panel">
+                        <div class="card-header">
+                            <h3>Thư viện Kịch bản & Spintax</h3>
+                            <button class="btn btn-primary btn-sm" id="btn-add-template">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                                <span>Thêm mẫu mới</span>
+                            </button>
+                        </div>
+                        <div class="card-body">
+                            <div class="template-list" id="template-list">
+                                <!-- Templates dynamically loaded -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right Column: Spintax Tester & Preview -->
+                    <div class="card card-panel">
+                        <div class="card-header">
+                            <h3>Trình Kiểm Tra & Thử Nghiệm Spintax Phim</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="form-group">
+                                <label for="spintax-input">Cú pháp Spintax thử nghiệm (Dùng <code>{link_fb}</code> để chèn link bài viết của bạn):</label>
+                                <textarea id="spintax-input" rows="5" class="form-control code-font">{Đã Cập Nhật Đầy Đủ phim tại đây|Link xem trọn bộ bản nét HD tại đây mọi người ơi|Xem full bộ vietsub cực nét ở đây nha} - {còn có nhiều phim hay khác nữa cho bạn nào muốn xem|tổng hợp nhiều phim siêu hot cho mọi người|kho phim vietsub chất lượng cao cập nhật liên tục} {👉🏻|👇🏻|🔥|🎬|🍿}
+{link_fb}</textarea>
+                                <small class="form-help">Mỗi lần tạo biến thể, từ ngữ và icon sẽ thay đổi để tránh Facebook phát hiện spam.</small>
+                            </div>
+
+                            <div class="form-actions">
+                                <button class="btn btn-primary" id="btn-generate-variants">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+                                    <span>Tạo 5 biến thể mẫu</span>
+                                </button>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="chk-auto-emoji">
+                                    <span>Thêm Emoji ngẫu nhiên ở cuối</span>
+                                </label>
+                            </div>
+
+                            <div class="preview-results">
+                                <label>Kết quả ngẫu nhiên tạo ra:</label>
+                                <div id="spintax-output-list" class="variant-box-list">
+                                    <div class="empty-state-sm">Nhấn "Tạo 5 biến thể mẫu" để xem trước các câu comment ngẫu nhiên.</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB 4: SETTINGS & DATA -->
+            <div id="settings-tab" class="tab-content">
+                <div class="settings-grid">
+                    <div class="card card-panel">
+                        <div class="card-header">
+                            <h3>Sao lưu & Quản lý dữ liệu</h3>
+                        </div>
+                        <div class="card-body">
+                            <p class="text-muted">Tất cả bài viết, lịch sử và kịch bản đều được lưu an toàn trong trình duyệt của bạn (LocalStorage).</p>
+                            <div class="setting-actions">
+                                <button class="btn btn-secondary" id="btn-export-data">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                                    <span>Xuất dữ liệu (Backup JSON)</span>
+                                </button>
+
+                                <label class="btn btn-secondary btn-file">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                                    <span>Nhập dữ liệu (Import JSON)</span>
+                                    <input type="file" id="input-import-file" accept=".json" style="display: none;">
+                                </label>
+
+                                <button class="btn btn-outline-danger" id="btn-reset-demo">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>
+                                    <span>Nạp lại dữ liệu mẫu Demo</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card card-panel">
+                        <div class="card-header">
+                            <h3>Hướng dẫn quy trình 1-Click Seeding An toàn</h3>
+                        </div>
+                        <div class="card-body tips-body">
+                            <ul class="tips-list">
+                                <li>
+                                    <span class="tip-num">1</span>
+                                    <div><strong>Đăng nhập sẵn Fanpage:</strong> Chuyển sang chế độ Fanpage trên trình duyệt trước khi seeding.</div>
+                                </li>
+                                <li>
+                                    <span class="tip-num">2</span>
+                                    <div><strong>Cấu hình Link trong Tab "Bộ mẫu Comment":</strong> Nhập link bài viết của bạn vào ô <code>Target Promo Link</code> ở tab 3 để hệ thống tự chèn vào <code>{link_fb}</code>.</div>
+                                </li>
+                                <li>
+                                    <span class="tip-num">3</span>
+                                    <div><strong>Bấm nút "Copy & Mở bài":</strong> Hệ thống sẽ tự động sao chép câu comment biến đổi ngẫu nhiên và mở bài viết người khác ở tab mới.</div>
+                                </li>
+                                <li>
+                                    <span class="tip-num">4</span>
+                                    <div><strong>Dán & Đăng:</strong> Nhấp vào khung comment bài viết trên Facebook, nhấn <kbd>Ctrl + V</kbd> (hoặc <kbd>Cmd + V</kbd>) rồi nhấn Enter để đăng.</div>
+                                </li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- MODAL: ADD POSTS (Single or Bulk) -->
+    <div class="modal-backdrop" id="modal-add-posts">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>Thêm Bài Viết Mục Tiêu (Bài Viết Người Khác)</h3>
+                    <button class="modal-close" id="btn-close-add-modal">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label for="bulk-links-input">Danh sách Link Bài viết Facebook người khác/Group (Mỗi link 1 dòng):</label>
+                        <textarea id="bulk-links-input" rows="6" class="form-control code-font" placeholder="https://www.facebook.com/permalink.php?story_fbid=123...
+https://www.facebook.com/groups/congdongreviewphim/posts/456..."></textarea>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group col-6">
+                            <label for="post-category-select">Chọn Kịch bản Comment mặc định:</label>
+                            <select id="post-category-select" class="form-control">
+                                <option value="PHIM_PROMO" selected>Điều hướng Link Phim ({link_fb})</option>
+                                <option value="KHEN_NGUOI">Khen ngợi / Tư vấn</option>
+                                <option value="HOI_GIA">Hỏi giá / Phí ship</option>
+                                <option value="REVIEW">Chia sẻ trải nghiệm</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group col-6">
+                            <label for="post-tag-input">Nhãn / Ghi chú (VD: Group Review Phim A):</label>
+                            <input type="text" id="post-tag-input" class="form-control" placeholder="Ví dụ: Group Phim Hot">
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" id="btn-cancel-add-modal">Hủy</button>
+                    <button class="btn btn-primary" id="btn-save-posts">Thêm bài viết vào danh sách</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification Container -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Application Scripts -->
+    <script src="js/spintax.js"></script>
+    <script src="js/storage.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>

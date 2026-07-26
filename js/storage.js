@@ -1,0 +1,222 @@
+/**
+ * STORAGE MANAGER
+ * Manages persistence in LocalStorage for posts, templates, promo link, history, and theme settings.
+ */
+
+const STORAGE_KEYS = {
+    POSTS: 'fb_seeding_posts_v1',
+    TEMPLATES: 'fb_seeding_templates_v1',
+    SETTINGS: 'fb_seeding_settings_v1',
+    PROMO_LINK: 'fb_seeding_promo_link_v1'
+};
+
+const DEFAULT_PROMO_LINK = 'https://www.facebook.com/permalink.php?story_fbid=pfbid02MoviePostExample&id=10009999';
+
+// Initial Sample Demo Data
+const INITIAL_SAMPLE_POSTS = [
+    {
+        id: 'post_demo_phim_1',
+        url: 'https://www.facebook.com/permalink.php?story_fbid=pfbid025983711&id=10006489',
+        tag: 'Group Phim / Bài viết đối thủ 01',
+        category: 'PHIM_PROMO',
+        status: 'PENDING',
+        currentComment: 'Đã Cập Nhật Đầy Đủ phim tại đây - còn có nhiều phim hay khác nữa cho bạn nào muốn xem nhiều phim hay 👉🏻\nhttps://www.facebook.com/permalink.php?story_fbid=pfbid02MoviePostExample&id=10009999',
+        createdAt: new Date().toISOString(),
+        lastActionAt: null
+    },
+    {
+        id: 'post_demo_phim_2',
+        url: 'https://www.facebook.com/groups/congdongreviewphim/posts/9876543210',
+        tag: 'Post Review Phim Hot',
+        category: 'PHIM_PROMO',
+        status: 'PENDING',
+        currentComment: 'Link xem trọn bộ bản nét HD tại đây mọi người ơi - kho phim vietsub chất lượng cao cập nhật liên tục 🎬\nhttps://www.facebook.com/permalink.php?story_fbid=pfbid02MoviePostExample&id=10009999',
+        createdAt: new Date().toISOString(),
+        lastActionAt: null
+    },
+    {
+        id: 'post_demo_3',
+        url: 'https://www.facebook.com/watch/?v=123456789',
+        tag: 'Video Reel Review Phim',
+        category: 'PHIM_PROMO',
+        status: 'COMPLETED',
+        currentComment: 'Xem full bộ vietsub cực nét ở đây nha - nhiều phim chiếu rạp đỉnh lắm nè 🍿\nhttps://www.facebook.com/permalink.php?story_fbid=pfbid02MoviePostExample&id=10009999',
+        createdAt: new Date().toISOString(),
+        lastActionAt: new Date(Date.now() - 3600000).toISOString()
+    }
+];
+
+class StorageManager {
+    /**
+     * Gets user's promo link (Link bài viết Facebook cá nhân/page của bạn)
+     * @returns {string}
+     */
+    static getPromoLink() {
+        return localStorage.getItem(STORAGE_KEYS.PROMO_LINK) || DEFAULT_PROMO_LINK;
+    }
+
+    /**
+     * Saves user's promo link
+     * @param {string} url
+     */
+    static savePromoLink(url) {
+        if (url && url.trim()) {
+            localStorage.setItem(STORAGE_KEYS.PROMO_LINK, url.trim());
+        }
+    }
+
+    /**
+     * Gets all posts from LocalStorage, or initializes with samples if empty
+     * @returns {Array}
+     */
+    static getPosts() {
+        try {
+            const data = localStorage.getItem(STORAGE_KEYS.POSTS);
+            if (!data) {
+                this.savePosts(INITIAL_SAMPLE_POSTS);
+                return INITIAL_SAMPLE_POSTS;
+            }
+            return JSON.parse(data);
+        } catch (e) {
+            console.error('Error reading posts from LocalStorage:', e);
+            return INITIAL_SAMPLE_POSTS;
+        }
+    }
+
+    /**
+     * Saves posts array to LocalStorage
+     * @param {Array} posts
+     */
+    static savePosts(posts) {
+        try {
+            localStorage.setItem(STORAGE_KEYS.POSTS, JSON.stringify(posts));
+        } catch (e) {
+            console.error('Error saving posts to LocalStorage:', e);
+        }
+    }
+
+    /**
+     * Gets templates from LocalStorage, or initializes default ones
+     * @returns {Array}
+     */
+    static getTemplates() {
+        try {
+            const data = localStorage.getItem(STORAGE_KEYS.TEMPLATES);
+            if (!data) {
+                this.saveTemplates(window.DEFAULT_TEMPLATES || []);
+                return window.DEFAULT_TEMPLATES || [];
+            }
+            return JSON.parse(data);
+        } catch (e) {
+            return window.DEFAULT_TEMPLATES || [];
+        }
+    }
+
+    /**
+     * Saves templates to LocalStorage
+     * @param {Array} templates
+     */
+    static saveTemplates(templates) {
+        localStorage.setItem(STORAGE_KEYS.TEMPLATES, JSON.stringify(templates));
+    }
+
+    /**
+     * Adds bulk links to the post list
+     * @param {string[]} urls
+     * @param {string} category
+     * @param {string} tag
+     * @returns {number} Count of added posts
+     */
+    static addBulkPosts(urls, category = 'PHIM_PROMO', tag = '') {
+        const posts = this.getPosts();
+        const templates = this.getTemplates();
+        const promoLink = this.getPromoLink();
+        const categoryTemplate = templates.find(t => t.category === category) || templates[0];
+        let addedCount = 0;
+
+        urls.forEach(url => {
+            const cleanUrl = url.trim();
+            if (!cleanUrl) return;
+
+            // Generate initial comment variation for this post with promo link inserted
+            const initialComment = categoryTemplate 
+                ? window.SpintaxEngine.generateComment(categoryTemplate.content, { link_fb: promoLink }) 
+                : `Đã Cập Nhật Đầy Đủ phim tại đây 👉🏻\n${promoLink}`;
+
+            const newPost = {
+                id: 'post_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
+                url: cleanUrl,
+                tag: tag.trim() || 'Link bài viết mới',
+                category: category,
+                status: 'PENDING',
+                currentComment: initialComment,
+                createdAt: new Date().toISOString(),
+                lastActionAt: null
+            };
+
+            posts.unshift(newPost);
+            addedCount++;
+        });
+
+        this.savePosts(posts);
+        return addedCount;
+    }
+
+    /**
+     * Updates status of a post
+     * @param {string} postId
+     * @param {string} status - PENDING | COMPLETED | SKIPPED
+     */
+    static updatePostStatus(postId, status) {
+        const posts = this.getPosts();
+        const target = posts.find(p => p.id === postId);
+        if (target) {
+            target.status = status;
+            target.lastActionAt = new Date().toISOString();
+            this.savePosts(posts);
+        }
+    }
+
+    /**
+     * Regenerates a new random comment for a specific post
+     * @param {string} postId
+     * @returns {string} New comment string
+     */
+    static regenerateCommentForPost(postId) {
+        const posts = this.getPosts();
+        const templates = this.getTemplates();
+        const promoLink = this.getPromoLink();
+        const target = posts.find(p => p.id === postId);
+        if (!target) return '';
+
+        const categoryTemplate = templates.find(t => t.category === target.category) || templates[0];
+        const newComment = categoryTemplate 
+            ? window.SpintaxEngine.generateComment(categoryTemplate.content, { link_fb: promoLink })
+            : `Đã Cập Nhật Đầy Đủ phim tại đây 👉🏻\n${promoLink}`;
+
+        target.currentComment = newComment;
+        this.savePosts(posts);
+        return newComment;
+    }
+
+    /**
+     * Deletes multiple posts by ID
+     * @param {string[]} postIds
+     */
+    static deletePosts(postIds) {
+        let posts = this.getPosts();
+        posts = posts.filter(p => !postIds.includes(p.id));
+        this.savePosts(posts);
+    }
+
+    /**
+     * Resets data back to initial demo data
+     */
+    static resetToDemoData() {
+        this.savePosts(INITIAL_SAMPLE_POSTS);
+        this.saveTemplates(window.DEFAULT_TEMPLATES || []);
+        this.savePromoLink(DEFAULT_PROMO_LINK);
+    }
+}
+
+window.StorageManager = StorageManager;
