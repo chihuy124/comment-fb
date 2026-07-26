@@ -60,6 +60,10 @@ document.addEventListener('DOMContentLoaded', () => {
         scannedResultsContainer: document.getElementById('scanned-results-container'),
         btnImportScannedAll: document.getElementById('btn-import-scanned-all'),
 
+        // Cloud API Settings
+        customCloudApiUrl: document.getElementById('custom-cloud-api-url'),
+        btnSaveCloudApi: document.getElementById('btn-save-cloud-api'),
+
         // Settings & Export
         btnExportData: document.getElementById('btn-export-data'),
         inputImportFile: document.getElementById('input-import-file'),
@@ -72,10 +76,16 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentTab = 'dashboard-tab';
     let scannedItems = [];
 
-    // Cloud Scanner API Endpoint (Fallback to local if running local)
-    const CLOUD_API_URL = window.location.hostname === 'localhost' 
-        ? 'http://localhost:5000/api/scan' 
-        : 'https://comment-fb-api.onrender.com/api/scan';
+    // Gets active Scanner API Endpoint
+    function getScannerApiUrl() {
+        const customUrl = localStorage.getItem('fb_custom_cloud_api_url');
+        if (customUrl && customUrl.trim()) {
+            return customUrl.trim();
+        }
+        return window.location.hostname === 'localhost' 
+            ? 'http://localhost:5000/api/scan' 
+            : 'https://comment-fb-api.onrender.com/api/scan';
+    }
 
     // Page titles mapping
     const TAB_TITLES = {
@@ -90,8 +100,29 @@ document.addEventListener('DOMContentLoaded', () => {
     function init() {
         bindEvents();
         initPromoLink();
+        initCloudApiSetting();
         renderAll();
         initTheme();
+    }
+
+    function initCloudApiSetting() {
+        const savedUrl = localStorage.getItem('fb_custom_cloud_api_url') || '';
+        if (elements.customCloudApiUrl) {
+            elements.customCloudApiUrl.value = savedUrl;
+        }
+
+        if (elements.btnSaveCloudApi) {
+            elements.btnSaveCloudApi.addEventListener('click', () => {
+                const url = elements.customCloudApiUrl.value.trim();
+                if (url) {
+                    localStorage.setItem('fb_custom_cloud_api_url', url);
+                    showToast('Đã lưu đường link Server Cloud API Scanner mới!', 'success');
+                } else {
+                    localStorage.removeItem('fb_custom_cloud_api_url');
+                    showToast('Đã khôi phục đường link Cloud API mặc định!', 'info');
+                }
+            });
+        }
     }
 
     // --- PROMO LINK INITIALIZATION & EVENT ---
@@ -174,10 +205,6 @@ document.addEventListener('DOMContentLoaded', () => {
         filtered.forEach(post => {
             const card = document.createElement('div');
             card.className = `post-action-card card-${post.status.toLowerCase()}`;
-            
-            const categoryLabels = {
-                'PHIM_PROMO': 'Điều hướng Link Phim ({link_fb})'
-            };
 
             const statusBadges = {
                 'PENDING': '<span class="post-status-badge status-pending">Chờ comment</span>',
@@ -375,13 +402,14 @@ document.addEventListener('DOMContentLoaded', () => {
     async function handleStartScan() {
         const keyword = elements.scanKeywordInput.value.trim() || 'review phim hay';
         const minCount = parseInt(elements.minIntentCount.value) || 2;
+        const apiUrl = getScannerApiUrl();
 
-        showToast(`Đang kết nối Server Cloud quét & phân tích comment bài Reels theo từ khóa "${keyword}"...`, 'info');
+        showToast(`Đang kết nối Server Cloud (${apiUrl}) quét & phân tích comment bài Reels theo từ khóa "${keyword}"...`, 'info');
         elements.btnStartScan.disabled = true;
         elements.btnStartScan.innerHTML = '<span>Đang kết nối Server Cloud đọc comment...</span>';
 
         try {
-            const response = await fetch(CLOUD_API_URL, {
+            const response = await fetch(apiUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ keyword: keyword, min_intent: minCount })
@@ -744,7 +772,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const icons = {
             success: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>',
             info: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>',
-            warning: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 1 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>'
+            warning: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>'
         };
 
         toast.innerHTML = `${icons[type] || icons.info} <span>${escapeHtml(message)}</span>`;

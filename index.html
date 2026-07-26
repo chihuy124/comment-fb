@@ -307,7 +307,7 @@
                                     <span class="post-tag-badge">tên phim là gì</span>
                                     <span class="post-tag-badge">link full</span>
                                     <span class="post-tag-badge">xem tiếp</span>
-                                    <span class="post-tag-badge">phần 2</span>
+                                    <span class="post-tag-badge">x tiếp</span>
                                 </div>
                             </div>
 
@@ -357,6 +357,20 @@
                 <div class="settings-grid">
                     <div class="card card-panel">
                         <div class="card-header">
+                            <h3>Cấu hình Cloud API Scanner Backend</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="form-group">
+                                <label for="custom-cloud-api-url">Link Server Cloud Scanner API (Ví dụ Render/Railway/VPS của bạn):</label>
+                                <input type="text" id="custom-cloud-api-url" class="form-control code-font" placeholder="https://your-cloud-scanner.onrender.com/api/scan">
+                                <small class="form-help">Nếu bạn deploy file <code>server.py</code> lên Render/Railway/VPS, hãy dán đường link API vào đây để trang Vercel tự động gọi sang.</small>
+                            </div>
+                            <button class="btn btn-primary btn-sm" id="btn-save-cloud-api">Lưu Đường Link Cloud API</button>
+                        </div>
+                    </div>
+
+                    <div class="card card-panel">
+                        <div class="card-header">
                             <h3>Sao lưu & Quản lý dữ liệu</h3>
                         </div>
                         <div class="card-body">
@@ -378,32 +392,6 @@
                                     <span>Xóa sạch toàn bộ dữ liệu</span>
                                 </button>
                             </div>
-                        </div>
-                    </div>
-
-                    <div class="card card-panel">
-                        <div class="card-header">
-                            <h3>Hướng dẫn quy trình 1-Click Seeding An toàn</h3>
-                        </div>
-                        <div class="card-body tips-body">
-                            <ul class="tips-list">
-                                <li>
-                                    <span class="tip-num">1</span>
-                                    <div><strong>Quét Reels Nhu Cầu Cao:</strong> Dùng tab <strong>Quét Reels Phim 🔥</strong> để hệ thống tìm các video đang có nhiều người comment hỏi xin link / hỏi tập 2.</div>
-                                </li>
-                                <li>
-                                    <span class="tip-num">2</span>
-                                    <div><strong>Cấu hình Link của bạn:</strong> Điền link bài viết của bạn vào <code>Target Promo Link</code> ở tab 3.</div>
-                                </li>
-                                <li>
-                                    <span class="tip-num">3</span>
-                                    <div><strong>Bấm nút "Copy & Mở bài":</strong> Hệ thống sẽ tự động sao chép câu comment biến đổi ngẫu nhiên và mở bài viết người khác ở tab mới.</div>
-                                </li>
-                                <li>
-                                    <span class="tip-num">4</span>
-                                    <div><strong>Dán & Đăng:</strong> Nhấp vào khung comment bài viết trên Facebook, nhấn <kbd>Ctrl + V</kbd> (hoặc <kbd>Cmd + V</kbd>) rồi nhấn Enter để đăng.</div>
-                                </li>
-                            </ul>
                         </div>
                     </div>
                 </div>
