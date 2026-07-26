@@ -10,7 +10,7 @@ from urllib.parse import quote, urlparse, parse_qs, unquote
 import requests
 from bs4 import BeautifulSoup
 
-REQUEST_TIMEOUT = 12
+REQUEST_TIMEOUT = 6
 
 UA_POOL = [
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -57,40 +57,43 @@ def _clean_ddg_href(href):
     return href
 
 
-def duckduckgo_search(query, max_pages=3):
-    """DuckDuckGo HTML endpoint — no JS, no captcha, generous limits."""
+def _deadline_ok(deadline):
+    return deadline is None or time.monotonic() < deadline
+
+
+def duckduckgo_search(query, max_pages=1, deadline=None):
     urls = set()
     base = "https://html.duckduckgo.com/html/"
     session = requests.Session()
     s = 0
     for page in range(max_pages):
+        if not _deadline_ok(deadline):
+            break
         try:
             data = {'q': query, 's': str(s), 'dc': str(s + 30)}
             r = session.post(base, data=data, headers=_headers(page), timeout=REQUEST_TIMEOUT)
             if r.status_code != 200:
                 break
             found_this_page = _extract_fb_urls(r.text)
-            # also parse <a class="result__a"> and follow /l/ wrapper
             soup = BeautifulSoup(r.text, 'html.parser')
             for a in soup.select('a.result__a, a.result__url'):
-                href = a.get('href', '')
-                real = _clean_ddg_href(href)
+                real = _clean_ddg_href(a.get('href', ''))
                 found_this_page |= _extract_fb_urls(real)
             if not found_this_page:
                 break
             urls |= found_this_page
             s += 30
-            time.sleep(0.5)
         except Exception as e:
             print(f"[ddg] {e}")
             break
     return urls
 
 
-def bing_search(query, max_pages=3):
-    """Bing web search HTML."""
+def bing_search(query, max_pages=1, deadline=None):
     urls = set()
     for page in range(max_pages):
+        if not _deadline_ok(deadline):
+            break
         first = page * 10 + 1
         try:
             r = requests.get(
@@ -104,17 +107,17 @@ def bing_search(query, max_pages=3):
             if not found:
                 break
             urls |= found
-            time.sleep(0.5)
         except Exception as e:
             print(f"[bing] {e}")
             break
     return urls
 
 
-def google_search(query, max_pages=2):
-    """Google web search HTML — kept as best-effort backup. Often 429s."""
+def google_search(query, max_pages=1, deadline=None):
     urls = set()
     for page in range(max_pages):
+        if not _deadline_ok(deadline):
+            break
         start = page * 10
         try:
             r = requests.get(
@@ -125,7 +128,6 @@ def google_search(query, max_pages=2):
             if r.status_code != 200:
                 break
             urls |= _extract_fb_urls(r.text)
-            time.sleep(1.0)
         except Exception as e:
             print(f"[google] {e}")
             break
@@ -149,17 +151,24 @@ def build_dork_queries(keyword):
     return q
 
 
-def discover_fb_reels(keyword, max_urls=100):
-    """Aggregate results across engines and queries. Fully free, no cookie."""
+def discover_fb_reels(keyword, max_urls=40, deadline=None):
+    """Aggregate results across engines and queries. Respects deadline.
+    Query fan-out is capped tight so we don't burn the Render 30s budget.
+    """
     all_urls = set()
-    for query in build_dork_queries(keyword):
-        if len(all_urls) >= max_urls:
+    # Only 3 highest-signal dork queries — full list was too expensive
+    queries = [
+        f'site:facebook.com/reel {keyword}',
+        f'site:facebook.com/watch {keyword}',
+        f'site:facebook.com/reel {keyword} "xin link"',
+    ]
+    for query in queries:
+        if len(all_urls) >= max_urls or not _deadline_ok(deadline):
             break
-        all_urls |= duckduckgo_search(query, max_pages=2)
-        if len(all_urls) >= max_urls:
+        all_urls |= duckduckgo_search(query, max_pages=1, deadline=deadline)
+        if len(all_urls) >= max_urls or not _deadline_ok(deadline):
             break
-        all_urls |= bing_search(query, max_pages=2)
-    # Google as light backup only — heavy 429 risk
-    if len(all_urls) < 15:
-        all_urls |= google_search(f'site:facebook.com/reel {keyword}', max_pages=1)
+        all_urls |= bing_search(query, max_pages=1, deadline=deadline)
+    if len(all_urls) < 5 and _deadline_ok(deadline):
+        all_urls |= google_search(f'site:facebook.com/reel {keyword}', max_pages=1, deadline=deadline)
     return list(all_urls)[:max_urls]

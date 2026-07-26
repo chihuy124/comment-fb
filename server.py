@@ -29,9 +29,11 @@ BASE_HEADERS = {
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
 }
 
-REQUEST_TIMEOUT = 15
-MAX_PAGES_PER_ENDPOINT = 3      # pagination depth
-MAX_LIVE_ITEMS_PER_KEYWORD = 40
+REQUEST_TIMEOUT = 5             # per HTTP call — mbasic almost always fails fast anyway
+MAX_PAGES_PER_ENDPOINT = 1      # no pagination — one page only
+MAX_LIVE_ITEMS_PER_KEYWORD = 20
+WALL_CLOCK_BUDGET_SEC = 22      # total time budget for the whole /api/scan handler
+                                # (Render hard-caps ~30s; gunicorn timeout=60 is backup)
 
 
 # ---------- Helpers ----------
@@ -270,14 +272,15 @@ def live_crawl_facebook_reels(keyword, fb_cookie=None, exclude_urls=None):
         if len(collected_urls) >= MAX_LIVE_ITEMS_PER_KEYWORD:
             break
 
-    # For each URL, best-effort fetch real comments
+    # NOTE: fetch_reel_comments removed from live crawl — mbasic Reel pages
+    # always return login wall from Render IPs, so it burns 5-15s per URL
+    # producing empty lists. Comments now come from the Chrome extension flow.
     scanned_items = []
     for canonical in list(collected_urls)[:MAX_LIVE_ITEMS_PER_KEYWORD]:
-        raw_comments = fetch_reel_comments(canonical, headers)
         scanned_items.append({
             "url": canonical,
             "tag": tag_by_url.get(canonical, f"Live crawl: {keyword}"),
-            "raw_comments": raw_comments or []
+            "raw_comments": [],
         })
     return scanned_items
 
@@ -379,6 +382,25 @@ def health():
 
 @app.route('/api/scan', methods=['POST'])
 def scan_reels():
+    try:
+        return _scan_reels_impl()
+    except Exception as e:
+        # Never let the client see a raw 500 — return partial-friendly JSON.
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "results": [],
+            "totalFound": 0,
+        }), 200
+
+
+def _scan_reels_impl():
+    start_time = time.monotonic()
+    def time_left():
+        return WALL_CLOCK_BUDGET_SEC - (time.monotonic() - start_time)
+
     data = request.get_json(silent=True) or {}
 
     # keywords
@@ -405,17 +427,27 @@ def scan_reels():
     pool = CURATED_POOL + load_extra_pool()
     existing = {r['url'] for r in pool}
 
-    # --- Live crawl on mbasic (works only if user provides a working cookie) ---
-    for kw in search_keywords:
-        for variant in expand_search_keywords(kw):
-            live_items = live_crawl_facebook_reels(variant, fb_cookie, exclude_urls)
-            for item in live_items:
-                canonical = canonicalize_fb_url(item['url']) or item['url']
-                if canonical not in existing and canonical not in exclude_urls:
-                    item['url'] = canonical
-                    item['source'] = 'live'
-                    pool.append(item)
-                    existing.add(canonical)
+    # --- Live crawl on mbasic (mostly no-op without valid cookie) ---
+    # Only run if a cookie was supplied — otherwise it just wastes wall clock.
+    if fb_cookie:
+        for kw in search_keywords:
+            if time_left() < 4:
+                break
+            for variant in expand_search_keywords(kw)[:2]:  # cap variants
+                if time_left() < 4:
+                    break
+                try:
+                    live_items = live_crawl_facebook_reels(variant, fb_cookie, exclude_urls)
+                except Exception as e:
+                    print(f"[live-crawl] {variant}: {e}")
+                    continue
+                for item in live_items:
+                    canonical = canonicalize_fb_url(item['url']) or item['url']
+                    if canonical not in existing and canonical not in exclude_urls:
+                        item['url'] = canonical
+                        item['source'] = 'live'
+                        pool.append(item)
+                        existing.add(canonical)
 
     # --- Free, cookie-less discovery via search engines ---
     # Since search results are pre-filtered by our intent-heavy dork queries
@@ -426,8 +458,11 @@ def scan_reels():
     se_urls = set()
     if discover_fb_reels is not None:
         for kw in search_keywords:
+            if time_left() < 4:
+                print(f"[budget] skipping SE for '{kw}' — {time_left():.1f}s left")
+                break
             try:
-                found = discover_fb_reels(kw, max_urls=80)
+                found = discover_fb_reels(kw, max_urls=40, deadline=start_time + WALL_CLOCK_BUDGET_SEC - 2)
                 for u in found:
                     canonical = canonicalize_fb_url(u)
                     if canonical and canonical not in existing and canonical not in exclude_urls:
