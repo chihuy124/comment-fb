@@ -20,7 +20,7 @@ class SpintaxEngine {
             text = text.replace(/\{link_fb\}/g, variables.link_fb);
         } else {
             // Default placeholder if promo link not set yet
-            text = text.replace(/\{link_fb\}/g, 'https://www.facebook.com/your-page-post-link');
+            text = text.replace(/\{link_fb\}/g, '');
         }
 
         const spintaxRegex = /\{([^{}]+)\}/g;
@@ -82,31 +82,13 @@ class SpintaxEngine {
     }
 }
 
-// Default Spintax Templates by Category
+// Default Spintax Templates (Only Phim / Promo Link)
 const DEFAULT_TEMPLATES = [
     {
         id: 'tpl_phim_promo',
         name: 'Điều hướng Link Phim / Bài viết của bạn',
         category: 'PHIM_PROMO',
         content: '{Đã Cập Nhật Đầy Đủ phim tại đây|Link xem trọn bộ bản nét HD tại đây mọi người ơi|Xem full bộ vietsub cực nét ở đây nha|Đã cập nhật tập mới nhất ở link này} - {còn có nhiều phim hay khác nữa cho bạn nào muốn xem|tổng hợp nhiều phim siêu hot cho mọi người|kho phim vietsub chất lượng cao cập nhật liên tục|nhiều phim chiếu rạp đỉnh lắm nè} {👉🏻|👇🏻|🔥|🎬|🍿}\n{link_fb}'
-    },
-    {
-        id: 'tpl_khen_nguoi',
-        name: 'Khen ngợi & Xin tư vấn',
-        category: 'KHEN_NGUOI',
-        content: '{Xin chào|Em chào ad|Dạ chào shop} {bài viết|mẫu này|sản phẩm này} {nhìn đẹp quá|ưng mắt thực sự|chất lượng ghê} {cho em xin thông tin tư vấn với ạ|inbox tư vấn giúp em nhé|shop tư vấn chi tiết cho em với} {👍|❤️|🔥}'
-    },
-    {
-        id: 'tpl_hoi_gia',
-        name: 'Hỏi giá & Phí vận chuyển',
-        category: 'HOI_GIA',
-        content: '{Dạ cho em hỏi|Shop ơi|Ad cho em xin giá|Mẫu này} {giá bao nhiêu vậy ạ|báo giá inbox giúp em|có sẵn hàng không shop} {phí ship thế nào ạ|có được kiểm tra hàng trước khi nhận không shop} {🙏|😊|👌}'
-    },
-    {
-        id: 'tpl_review',
-        name: 'Chia sẻ trải nghiệm & Feedback tốt',
-        category: 'REVIEW',
-        content: '{Mình từng mua|Em đã mua dùng|Nhà mình mua thử} {mẫu này rồi|dịch vụ bên shop rồi|sản phẩm này rồi} {dùng rất ổn nha mọi người|ưng lắm luôn|chất lượng vượt mong đợi} {chúc shop đắt hàng nhé|sẽ tiếp tục ủng hộ|vote 5 sao} {✨|💯|😍}'
     }
 ];
 

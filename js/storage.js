@@ -80,7 +80,7 @@ class StorageManager {
     }
 
     /**
-     * Gets templates from LocalStorage, or initializes default ones
+     * Gets templates from LocalStorage, automatically filtering out legacy 3 templates
      * @returns {Array}
      */
     static getTemplates() {
@@ -90,7 +90,18 @@ class StorageManager {
                 this.saveTemplates(window.DEFAULT_TEMPLATES || []);
                 return window.DEFAULT_TEMPLATES || [];
             }
-            return JSON.parse(data);
+            let templates = JSON.parse(data);
+            
+            // Remove legacy 3 templates: KHEN_NGUOI, HOI_GIA, REVIEW
+            const cleanTemplates = templates.filter(t => t.category === 'PHIM_PROMO' || t.id === 'tpl_phim_promo');
+            if (cleanTemplates.length === 0) {
+                this.saveTemplates(window.DEFAULT_TEMPLATES || []);
+                return window.DEFAULT_TEMPLATES || [];
+            }
+            if (cleanTemplates.length !== templates.length) {
+                this.saveTemplates(cleanTemplates);
+            }
+            return cleanTemplates;
         } catch (e) {
             return window.DEFAULT_TEMPLATES || [];
         }
@@ -122,7 +133,6 @@ class StorageManager {
             const cleanUrl = url.trim();
             if (!cleanUrl) return;
 
-            // Generate initial comment variation for this post with promo link inserted
             const initialComment = categoryTemplate 
                 ? window.SpintaxEngine.generateComment(categoryTemplate.content, { link_fb: promoLink }) 
                 : `Đã Cập Nhật Đầy Đủ phim tại đây 👉🏻\n${promoLink}`;
