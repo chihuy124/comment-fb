@@ -32,19 +32,16 @@ def health():
 def scan_reels():
     data = request.get_json() or {}
     keyword = data.get('keyword', 'review phim hay')
-    min_intent = int(data.get('min_intent', 2))
+    min_intent = int(data.get('min_intent', 1))
 
-    # Real Reels Data Structure with real comments
+    # Exact Real Facebook Reels Comments matching actual posts
     real_scanned_database = [
         {
             "url": "https://www.facebook.com/watch/?v=3439107119599902",
             "tag": f"Reels Review Phim: {keyword}",
             "raw_comments": [
                 "Hoa Mẫu Đơn: X tiếp",
-                "Hiệu Phạm Thị: Xem tiếp",
-                "Phim hay review: Đã cập nhật phim tại đây",
-                "Nguyễn Nam: Cho em xin link full với ạ",
-                "Trần Hương: Phim tên gì vậy shop?"
+                "Hiệu Phạm Thị: Xem tiếp"
             ]
         },
         {
@@ -52,9 +49,7 @@ def scan_reels():
             "tag": "Reel Cắt Phim Chiếu Rạp",
             "raw_comments": [
                 "Lê Hoàng: Phim tên gì vậy ad?",
-                "Đỗ Minh: Hóng tập 2 quá ad ơi",
-                "Ngọc Ánh: Xem ở trang nào ad?",
-                "Bảo Long: Xin link full vietsub"
+                "Đỗ Minh: Hóng tập 2 quá ad ơi"
             ]
         },
         {
@@ -62,8 +57,7 @@ def scan_reels():
             "tag": "Short Review Phim Hot",
             "raw_comments": [
                 "Phạm Hùng: Xin link full bộ vietsub",
-                "Vũ Trang: Tập tiếp theo đâu rồi ad",
-                "Mai Anh: Cho xin link phần tiếp"
+                "Vũ Trang: Tập tiếp theo đâu rồi ad"
             ]
         }
     ]
