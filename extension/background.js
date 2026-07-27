@@ -129,7 +129,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   // Web app asks to post one comment on one reel
   if (msg?.type === 'POST_COMMENT') {
-    postCommentOnReel(msg.url, msg.text).then(sendResponse);
+    postCommentOnReel(msg.url, msg.text, msg.behaviour || {}).then(sendResponse);
     return true;
   }
 
@@ -185,10 +185,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // lets the content script fill and submit the composer, then reports back.
 // On success the tab is closed; on failure it is brought to the front with the
 // text already filled in so the user can finish (or abandon) it by hand.
-async function postCommentOnReel(url, text) {
+async function postCommentOnReel(url, text, behaviour = {}) {
   const canonical = canonicalReelUrl(url) || url;
   const reelId = extractReelIdBg(canonical);
-  console.log('[BG][comment] opening', canonical);
+  console.log('[BG][comment] opening', canonical, 'behaviour', behaviour);
 
   let tab;
   try {
@@ -196,14 +196,23 @@ async function postCommentOnReel(url, text) {
   } catch (e) {
     return { ok: false, error: 'tab_create_failed' };
   }
-  missions.set(tab.id, { mode: 'comment', text, reelId });
+  missions.set(tab.id, {
+    mode: 'comment',
+    text,
+    reelId,
+    dwellMs: behaviour.dwellMs || 0,
+    likeChance: behaviour.likeChance || 0,
+  });
   ensureKeepAlive();
 
+  // Watchdog has to outlast the dwell period, otherwise a long "watch" would
+  // look like a hang.
+  const watchdogMs = 90000 + (behaviour.dwellMs || 0);
   const result = await new Promise((resolve) => {
     const timer = setTimeout(() => {
       pendingComments.delete(tab.id);
       resolve({ ok: false, error: 'timeout', hint: 'Hết thời gian chờ — tab được giữ lại để bạn kiểm tra.' });
-    }, 90000);
+    }, watchdogMs);
     pendingComments.set(tab.id, {
       resolve: (payload) => { clearTimeout(timer); resolve(payload); },
       timer,

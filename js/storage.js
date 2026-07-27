@@ -7,7 +7,8 @@ const STORAGE_KEYS = {
     POSTS: 'fb_seeding_posts_v1',
     TEMPLATES: 'fb_seeding_templates_v1',
     SETTINGS: 'fb_seeding_settings_v1',
-    PROMO_LINK: 'fb_seeding_promo_link_v1'
+    PROMO_LINK: 'fb_seeding_promo_link_v1',
+    PROMO_LINKS_EXTRA: 'fb_seeding_promo_links_extra_v1'
 };
 
 const DEFAULT_PROMO_LINK = '';
@@ -39,6 +40,44 @@ class StorageManager {
         } else {
             localStorage.removeItem(STORAGE_KEYS.PROMO_LINK);
         }
+    }
+
+    /**
+     * All promo links the user configured (slot 1 is the legacy single link,
+     * slots 2-3 are extras). Rotating between several destinations is what
+     * stops every comment carrying the identical URL.
+     * @returns {string[]} only non-empty, trimmed links
+     */
+    static getPromoLinks() {
+        const extras = [];
+        try {
+            const raw = localStorage.getItem(STORAGE_KEYS.PROMO_LINKS_EXTRA);
+            if (raw) extras.push(...JSON.parse(raw));
+        } catch (e) {}
+        return [this.getPromoLink(), ...extras]
+            .map(l => (l || '').trim())
+            .filter(Boolean);
+    }
+
+    /**
+     * @param {string[]} links full list; first element goes to the legacy key
+     */
+    static savePromoLinks(links) {
+        const clean = (links || []).map(l => (l || '').trim());
+        this.savePromoLink(clean[0] || '');
+        const extras = clean.slice(1);
+        if (extras.some(Boolean)) {
+            localStorage.setItem(STORAGE_KEYS.PROMO_LINKS_EXTRA, JSON.stringify(extras));
+        } else {
+            localStorage.removeItem(STORAGE_KEYS.PROMO_LINKS_EXTRA);
+        }
+    }
+
+    /** Picks one promo link at random, so consecutive comments differ. */
+    static pickPromoLink() {
+        const links = this.getPromoLinks();
+        if (links.length === 0) return '';
+        return links[Math.floor(Math.random() * links.length)];
     }
 
     /**
@@ -125,7 +164,6 @@ class StorageManager {
     static addBulkPosts(urls, category = 'PHIM_PROMO', tag = '') {
         const posts = this.getPosts();
         const templates = this.getTemplates();
-        const promoLink = this.getPromoLink();
         const categoryTemplate = templates.find(t => t.category === category) || templates[0];
         let addedCount = 0;
 
@@ -133,7 +171,10 @@ class StorageManager {
             const cleanUrl = url.trim();
             if (!cleanUrl) return;
 
-            const initialComment = categoryTemplate 
+            // Pick per post, not per batch, so a bulk import doesn't hand the
+            // same URL to every single comment.
+            const promoLink = this.pickPromoLink();
+            const initialComment = categoryTemplate
                 ? window.SpintaxEngine.generateComment(categoryTemplate.content, { link_fb: promoLink }) 
                 : `Đã Cập Nhật Đầy Đủ phim tại đây 👉🏻\n${promoLink}`;
 
@@ -179,7 +220,7 @@ class StorageManager {
     static regenerateCommentForPost(postId) {
         const posts = this.getPosts();
         const templates = this.getTemplates();
-        const promoLink = this.getPromoLink();
+        const promoLink = this.pickPromoLink();
         const target = posts.find(p => p.id === postId);
         if (!target) return '';
 

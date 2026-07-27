@@ -24,7 +24,10 @@
       return;
     }
     if (mission.mode === 'comment') {
-      const res = await postComment(mission.text, mission.reelId);
+      const res = await postComment(mission.text, mission.reelId, {
+        dwellMs: mission.dwellMs,
+        likeChance: mission.likeChance,
+      });
       chrome.runtime.sendMessage({ type: 'COMMENT_RESULT', url: location.href, ...res });
       return;
     }
@@ -191,12 +194,43 @@ function sweepReelUrls() {
 
 // ---------- COMMENT MODE (post one comment on this reel) ----------
 
-async function postComment(text, expectedReelId) {
+async function postComment(text, expectedReelId, opts = {}) {
   if (!text || !String(text).trim()) return { ok: false, error: 'empty_text' };
 
-  console.log('[FB Seeding CS] comment mode on', location.href);
+  const dwellMs = Math.max(0, opts.dwellMs || 0);
+  const likeChance = Math.min(1, Math.max(0, opts.likeChance || 0));
+
+  console.log('[FB Seeding CS] comment mode on', location.href, '| dwell', dwellMs, 'ms | likeChance', likeChance);
   await sleep(3000);
   await dismissLoginNags();
+
+  // Behave like a viewer before commenting: let the clip actually play, scroll
+  // through the existing comments, and sometimes like the reel. Posting within
+  // a few seconds of load with zero interaction is a distinctly non-human trace.
+  // NB: videos are deliberately NOT paused here (unlike scrape mode) so watch
+  // time is real.
+  let liked = false;
+  if (dwellMs > 0) {
+    const dwellEnd = Date.now() + dwellMs;
+
+    // Open the panel early so there is something to read while "watching"
+    await openCommentPanel();
+    const readPanel = findCommentScrollContainer();
+
+    if (likeChance > 0 && Math.random() < likeChance) {
+      // Like partway through rather than instantly on arrival
+      await sleep(Math.min(dwellMs * 0.4, 8000));
+      liked = await likeCurrentReel();
+    }
+
+    while (Date.now() < dwellEnd) {
+      if (readPanel) {
+        try { readPanel.scrollTop += 200 + Math.random() * 250; } catch (e) {}
+      }
+      await sleep(1800 + Math.random() * 2200);
+    }
+    console.log('[FB Seeding CS] dwell finished, liked =', liked);
+  }
 
   const opened = await openCommentPanel();
   if (!opened) {
@@ -248,7 +282,7 @@ async function postComment(text, expectedReelId) {
 
   if (emptied) {
     console.log('[FB Seeding CS] comment posted');
-    return { ok: true, posted: oneLine };
+    return { ok: true, posted: oneLine, liked };
   }
 
   // Composer still holds our text → try the explicit send control once.
@@ -258,7 +292,7 @@ async function postComment(text, expectedReelId) {
     await sleep(2500);
     if (!(box.innerText || '').trim()) {
       console.log('[FB Seeding CS] comment posted via send button');
-      return { ok: true, posted: oneLine };
+      return { ok: true, posted: oneLine, liked };
     }
   }
 
@@ -268,6 +302,28 @@ async function postComment(text, expectedReelId) {
     typed,
     hint: 'Đã điền nội dung nhưng Facebook không nhận. Tab được giữ lại để bạn bấm gửi thủ công.',
   };
+}
+
+async function likeCurrentReel() {
+  // Only ever likes — never unlikes. If the reel is already liked we leave it
+  // alone, so re-running over the same reel can't toggle a like off.
+  const candidates = Array.from(document.querySelectorAll('[aria-label][role="button"], div[role="button"][aria-label]'));
+  for (const el of candidates) {
+    const label = (el.getAttribute('aria-label') || '').trim().toLowerCase();
+    const isLike = label === 'thích' || label === 'like';
+    if (!isLike) continue;
+    // aria-pressed / "Bỏ thích" mean it is already liked
+    if (el.getAttribute('aria-pressed') === 'true') return false;
+    try {
+      humanClick(el);
+      await sleep(700);
+      console.log('[FB Seeding CS] liked the reel');
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+  return false;
 }
 
 function findCommentComposer() {

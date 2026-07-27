@@ -202,6 +202,31 @@
                             <input type="number" id="bulk-delay-max" class="form-control" value="90" min="5" max="900" style="width:120px;">
                         </div>
 
+                        <div class="form-group" style="margin:0;">
+                            <label for="bulk-dwell-min" style="font-size:0.82rem;">Xem reel trước khi comment (giây)</label>
+                            <div style="display:flex; gap:0.4rem; align-items:center;">
+                                <input type="number" id="bulk-dwell-min" class="form-control" value="15" min="0" max="300" style="width:78px;">
+                                <span style="color:var(--text-muted);">–</span>
+                                <input type="number" id="bulk-dwell-max" class="form-control" value="40" min="0" max="300" style="width:78px;">
+                            </div>
+                        </div>
+                        <div class="form-group" style="margin:0;">
+                            <label for="bulk-like-chance" style="font-size:0.82rem;">Tỉ lệ like reel (%)</label>
+                            <input type="number" id="bulk-like-chance" class="form-control" value="30" min="0" max="100" style="width:100px;">
+                        </div>
+                        <div class="form-group" style="margin:0;">
+                            <label for="bulk-break-every" style="font-size:0.82rem;">Nghỉ dài sau mỗi (bài)</label>
+                            <input type="number" id="bulk-break-every" class="form-control" value="4" min="0" max="50" style="width:100px;">
+                        </div>
+                        <div class="form-group" style="margin:0;">
+                            <label for="bulk-break-min" style="font-size:0.82rem;">Nghỉ dài (phút)</label>
+                            <div style="display:flex; gap:0.4rem; align-items:center;">
+                                <input type="number" id="bulk-break-min" class="form-control" value="8" min="1" max="120" style="width:78px;">
+                                <span style="color:var(--text-muted);">–</span>
+                                <input type="number" id="bulk-break-max" class="form-control" value="20" min="1" max="180" style="width:78px;">
+                            </div>
+                        </div>
+
                         <button class="btn btn-primary" id="btn-comment-all" disabled title="Cần cài Chrome Extension trước">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"></path></svg>
                             <span>Comment Tất Cả</span>
@@ -266,9 +291,19 @@
                             <span class="badge badge-pro">Target Promo Link</span>
                         </div>
                         <div class="promo-input-group">
-                            <input type="text" id="input-promo-link" class="form-control code-font" placeholder="Dán link bài viết Facebook của bạn tại đây (ví dụ: https://www.facebook.com/your-page/posts/123456)...">
+                            <input type="text" id="input-promo-link" class="form-control code-font" placeholder="Link 1 — bắt buộc (ví dụ: https://www.facebook.com/share/p/abc123/)...">
                             <button class="btn btn-primary" id="btn-save-promo-link">Lưu Link</button>
                         </div>
+                        <div class="promo-input-group" style="margin-top:0.5rem;">
+                            <input type="text" id="input-promo-link-2" class="form-control code-font" placeholder="Link 2 — tùy chọn, để trống nếu chưa có...">
+                        </div>
+                        <div class="promo-input-group" style="margin-top:0.5rem;">
+                            <input type="text" id="input-promo-link-3" class="form-control code-font" placeholder="Link 3 — tùy chọn, để trống nếu chưa có...">
+                        </div>
+                        <small class="form-help" style="margin-top:0.5rem; display:block;">
+                            Điền nhiều link thì mỗi comment sẽ dùng một link được chọn ngẫu nhiên — tránh việc mọi comment đều mang đúng một URL.
+                            Bấm "Lưu Link" để lưu cả 3 ô.
+                        </small>
                     </div>
                 </section>
 

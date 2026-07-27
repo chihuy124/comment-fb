@@ -38,6 +38,7 @@
           type: 'POST_COMMENT',
           url: msg.url,
           text: msg.text,
+          behaviour: msg.behaviour || {},
         });
         window.postMessage(
           { source: TAG, type: 'COMMENT_DONE', requestId: msg.requestId, response },

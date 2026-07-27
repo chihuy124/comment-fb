@@ -13,6 +13,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Promo Link Input
         inputPromoLink: document.getElementById('input-promo-link'),
+        inputPromoLink2: document.getElementById('input-promo-link-2'),
+        inputPromoLink3: document.getElementById('input-promo-link-3'),
         btnSavePromoLink: document.getElementById('btn-save-promo-link'),
         
         // Stats
@@ -26,6 +28,12 @@ document.addEventListener('DOMContentLoaded', () => {
         cardsContainer: document.getElementById('cards-container'),
         bulkDelayMin: document.getElementById('bulk-delay-min'),
         bulkDelayMax: document.getElementById('bulk-delay-max'),
+        bulkDwellMin: document.getElementById('bulk-dwell-min'),
+        bulkDwellMax: document.getElementById('bulk-dwell-max'),
+        bulkLikeChance: document.getElementById('bulk-like-chance'),
+        bulkBreakEvery: document.getElementById('bulk-break-every'),
+        bulkBreakMin: document.getElementById('bulk-break-min'),
+        bulkBreakMax: document.getElementById('bulk-break-max'),
         btnCommentAll: document.getElementById('btn-comment-all'),
         btnStopCommentAll: document.getElementById('btn-stop-comment-all'),
         bulkStatus: document.getElementById('bulk-status'),
@@ -173,18 +181,36 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- PROMO LINK INITIALIZATION & EVENT ---
     function initPromoLink() {
-        const promoLink = StorageManager.getPromoLink();
-        elements.inputPromoLink.value = promoLink;
+        const links = StorageManager.getPromoLinks();
+        elements.inputPromoLink.value = links[0] || '';
+        if (elements.inputPromoLink2) elements.inputPromoLink2.value = links[1] || '';
+        if (elements.inputPromoLink3) elements.inputPromoLink3.value = links[2] || '';
 
         elements.btnSavePromoLink.addEventListener('click', () => {
-            const newLink = elements.inputPromoLink.value.trim();
-            if (!newLink.startsWith('http')) {
-                showToast('Link Facebook phải bắt đầu bằng http:// hoặc https://', 'warning');
+            const entered = [
+                elements.inputPromoLink.value,
+                elements.inputPromoLink2 ? elements.inputPromoLink2.value : '',
+                elements.inputPromoLink3 ? elements.inputPromoLink3.value : '',
+            ].map(v => (v || '').trim());
+
+            if (!entered[0].startsWith('http')) {
+                showToast('Link 1 là bắt buộc và phải bắt đầu bằng http:// hoặc https://', 'warning');
+                return;
+            }
+            const badExtra = entered.slice(1).find(v => v && !v.startsWith('http'));
+            if (badExtra) {
+                showToast('Link phụ phải bắt đầu bằng http:// hoặc https:// (hoặc để trống).', 'warning');
                 return;
             }
 
-            StorageManager.savePromoLink(newLink);
-            showToast('Đã lưu Link Facebook của bạn thành công! Tất cả comment sẽ tự động cập nhật link này.', 'success');
+            StorageManager.savePromoLinks(entered);
+            const count = entered.filter(Boolean).length;
+            showToast(
+                count > 1
+                    ? `Đã lưu ${count} link. Mỗi comment sẽ dùng một link ngẫu nhiên trong số này.`
+                    : 'Đã lưu link. Thêm link 2 và 3 để mỗi comment không dùng chung một URL.',
+                'success'
+            );
             
             // Regenerate comments for pending posts
             const posts = StorageManager.getPosts();
@@ -556,7 +582,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Sends one comment request to the extension and resolves with its result.
     // Shared by the per-card button and the sequential "Comment Tất Cả" run.
-    function requestCommentPost(post) {
+    function requestCommentPost(post, behaviour = {}) {
         const requestId = scrapeIdFromRequest();
         const done = new Promise((resolve, reject) => {
             const timeout = setTimeout(() => reject(new Error('Quá thời gian chờ extension.')), 150000);
@@ -579,7 +605,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         window.postMessage({
             source: EXT_TAG, type: 'POST_COMMENT', requestId,
-            url: post.url, text: post.currentComment,
+            url: post.url, text: post.currentComment, behaviour,
         }, '*');
 
         return done;
@@ -649,12 +675,45 @@ document.addEventListener('DOMContentLoaded', () => {
                 : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"></path></svg><span>Comment Tất Cả</span>';
         }
         if (elements.btnStopCommentAll) elements.btnStopCommentAll.disabled = !running;
-        if (elements.bulkDelayMin) elements.bulkDelayMin.disabled = running;
-        if (elements.bulkDelayMax) elements.bulkDelayMax.disabled = running;
+        [
+            elements.bulkDelayMin, elements.bulkDelayMax,
+            elements.bulkDwellMin, elements.bulkDwellMax,
+            elements.bulkLikeChance, elements.bulkBreakEvery,
+            elements.bulkBreakMin, elements.bulkBreakMax,
+        ].forEach(el => { if (el) el.disabled = running; });
     }
 
     function setBulkStatus(html) {
         if (elements.bulkStatus) elements.bulkStatus.innerHTML = html;
+    }
+
+    // Human gaps are heavy-tailed: mostly short, with the occasional long pause.
+    // A flat uniform draw between two bounds is itself a recognisable signature,
+    // so skew toward the low end and sometimes stretch well past the maximum.
+    function nextGapMs(minS, maxS) {
+        const skewed = minS + (maxS - minS) * Math.pow(Math.random(), 1.8);
+        const stretched = Math.random() < 0.15 ? skewed * (2 + Math.random() * 2) : skewed;
+        return stretched * 1000;
+    }
+
+    function readBulkSettings() {
+        let minS = Math.max(5, parseInt(elements.bulkDelayMin?.value) || 30);
+        let maxS = Math.max(5, parseInt(elements.bulkDelayMax?.value) || 90);
+        if (minS > maxS) { const t = minS; minS = maxS; maxS = t; }
+
+        let dwellMinS = Math.max(0, parseInt(elements.bulkDwellMin?.value) || 0);
+        let dwellMaxS = Math.max(0, parseInt(elements.bulkDwellMax?.value) || 0);
+        if (dwellMinS > dwellMaxS) { const t = dwellMinS; dwellMinS = dwellMaxS; dwellMaxS = t; }
+
+        let breakMinM = Math.max(1, parseInt(elements.bulkBreakMin?.value) || 8);
+        let breakMaxM = Math.max(1, parseInt(elements.bulkBreakMax?.value) || 20);
+        if (breakMinM > breakMaxM) { const t = breakMinM; breakMinM = breakMaxM; breakMaxM = t; }
+
+        return {
+            minS, maxS, dwellMinS, dwellMaxS, breakMinM, breakMaxM,
+            likeChance: Math.min(100, Math.max(0, parseInt(elements.bulkLikeChance?.value) || 0)) / 100,
+            breakEvery: Math.max(0, parseInt(elements.bulkBreakEvery?.value) || 0),
+        };
     }
 
     function formatMMSS(ms) {
@@ -694,10 +753,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (bulkRunning) return;
 
-        let minS = Math.max(5, parseInt(elements.bulkDelayMin?.value) || 30);
-        let maxS = Math.max(5, parseInt(elements.bulkDelayMax?.value) || 90);
-        if (minS > maxS) { const t = minS; minS = maxS; maxS = t; }
-
+        const cfg = readBulkSettings();
         const queue = StorageManager.getPosts()
             .filter(p => p.status === 'PENDING' && p.currentComment && p.currentComment.trim());
 
@@ -708,23 +764,36 @@ document.addEventListener('DOMContentLoaded', () => {
 
         bulkAbort = false;
         setBulkRunning(true);
-        let posted = 0, failed = 0, consecutiveFailures = 0;
+        let posted = 0, failed = 0, consecutiveFailures = 0, likedCount = 0;
+        let sinceBreak = 0;
+        // Randomise the burst length too, so breaks don't land on a fixed cadence
+        let burstTarget = cfg.breakEvery > 0
+            ? Math.max(1, cfg.breakEvery + Math.floor(Math.random() * 3) - 1)
+            : 0;
 
-        showToast(`Bắt đầu đăng tuần tự ${queue.length} bài, cách nhau ${minS}-${maxS}s.`, 'info');
+        showToast(`Bắt đầu đăng tuần tự ${queue.length} bài, cách nhau ${cfg.minS}-${cfg.maxS}s.`, 'info');
 
         for (let i = 0; i < queue.length; i++) {
             if (bulkAbort) break;
             const post = queue[i];
             const pos = `Bài ${i + 1}/${queue.length}`;
 
-            setBulkStatus(`${pos} · <span style="color:var(--accent-blue);">đang mở bài và đăng comment...</span> · ✅ ${posted} · ✗ ${failed}`);
+            const dwellMs = cfg.dwellMaxS > 0
+                ? (cfg.dwellMinS + Math.random() * (cfg.dwellMaxS - cfg.dwellMinS)) * 1000
+                : 0;
+
+            setBulkStatus(
+                `${pos} · <span style="color:var(--accent-blue);">${dwellMs > 0 ? `đang xem reel ~${Math.round(dwellMs / 1000)}s rồi comment...` : 'đang mở bài và đăng comment...'}</span>` +
+                ` · ✅ ${posted} · ✗ ${failed}${likedCount ? ` · 👍 ${likedCount}` : ''}`
+            );
 
             let res;
             try {
-                res = await requestCommentPost(post);
+                res = await requestCommentPost(post, { dwellMs, likeChance: cfg.likeChance });
             } catch (err) {
                 res = { ok: false, error: 'exception', hint: err.message };
             }
+            if (res?.liked) likedCount++;
 
             if (res?.ok) {
                 StorageManager.updatePostStatus(post.id, 'COMPLETED');
@@ -748,21 +817,33 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             if (bulkAbort) break;
+            sinceBreak++;
 
-            // Random gap before the next one (no gap after the last)
+            // Gap before the next one (nothing to wait for after the last)
             if (i < queue.length - 1) {
-                const waitMs = (minS + Math.random() * (maxS - minS)) * 1000;
-                const outcome = await waitWithCountdown(
-                    waitMs,
-                    `${pos} xong · ✅ ${posted} · ✗ ${failed} · chờ bài ${i + 2}/${queue.length} sau`
-                );
+                const tally = `✅ ${posted} · ✗ ${failed}${likedCount ? ` · 👍 ${likedCount}` : ''}`;
+                let waitMs, label;
+
+                if (burstTarget > 0 && sinceBreak >= burstTarget) {
+                    // Long break between bursts — the shape of a real session
+                    waitMs = (cfg.breakMinM + Math.random() * (cfg.breakMaxM - cfg.breakMinM)) * 60000;
+                    label = `${tally} · <span style="color:var(--accent-blue);">nghỉ dài sau ${sinceBreak} bài</span> · tiếp tục sau`;
+                    sinceBreak = 0;
+                    burstTarget = Math.max(1, cfg.breakEvery + Math.floor(Math.random() * 3) - 1);
+                } else {
+                    waitMs = nextGapMs(cfg.minS, cfg.maxS);
+                    label = `${pos} xong · ${tally} · chờ bài ${i + 2}/${queue.length} sau`;
+                }
+
+                const outcome = await waitWithCountdown(waitMs, label);
                 if (outcome === 'aborted') break;
             }
         }
 
         const stopped = bulkAbort;
         setBulkStatus(
-            `<strong>${stopped ? 'Đã dừng' : 'Hoàn tất'}:</strong> đăng thành công ${posted}, thất bại ${failed} / ${queue.length} bài.`
+            `<strong>${stopped ? 'Đã dừng' : 'Hoàn tất'}:</strong> đăng thành công ${posted}, thất bại ${failed} / ${queue.length} bài` +
+            `${likedCount ? `, đã like ${likedCount} reel` : ''}.`
         );
         showToast(`${stopped ? 'Đã dừng' : 'Xong'}: đăng ${posted}, lỗi ${failed}.`, stopped ? 'info' : 'success');
         setBulkRunning(false);
@@ -1303,6 +1384,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 posts: StorageManager.getPosts(),
                 templates: StorageManager.getTemplates(),
                 promoLink: StorageManager.getPromoLink(),
+                promoLinks: StorageManager.getPromoLinks(),
                 exportedAt: new Date().toISOString()
             };
             const jsonStr = JSON.stringify(data, null, 2);
@@ -1328,9 +1410,16 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (parsed.posts && Array.isArray(parsed.posts)) {
                         StorageManager.savePosts(parsed.posts);
                         if (parsed.templates) StorageManager.saveTemplates(parsed.templates);
-                        if (parsed.promoLink) {
-                            StorageManager.savePromoLink(parsed.promoLink);
-                            elements.inputPromoLink.value = parsed.promoLink;
+                        // Newer backups carry all slots; older ones only one link
+                        const importedLinks = Array.isArray(parsed.promoLinks) && parsed.promoLinks.length
+                            ? parsed.promoLinks
+                            : (parsed.promoLink ? [parsed.promoLink] : []);
+                        if (importedLinks.length) {
+                            StorageManager.savePromoLinks(importedLinks);
+                            const saved = StorageManager.getPromoLinks();
+                            elements.inputPromoLink.value = saved[0] || '';
+                            if (elements.inputPromoLink2) elements.inputPromoLink2.value = saved[1] || '';
+                            if (elements.inputPromoLink3) elements.inputPromoLink3.value = saved[2] || '';
                         }
                         showToast('Đã nhập thành công dữ liệu từ file sao lưu!', 'success');
                         renderAll();
@@ -1387,8 +1476,10 @@ document.addEventListener('DOMContentLoaded', () => {
     function generateSpintaxPreview() {
         const inputStr = elements.spintaxInput.value;
         const addEmoji = elements.chkAutoEmoji.checked;
-        const promoLink = StorageManager.getPromoLink();
-        const variants = window.SpintaxEngine.generateVariants(inputStr, { link_fb: promoLink }, 5, addEmoji);
+        // Preview each variant with a freshly picked link so the rotation is visible
+        const variants = window.SpintaxEngine
+            .generateVariants(inputStr, { link_fb: StorageManager.pickPromoLink() }, 5, addEmoji)
+            .map(v => v.replace(/https?:\/\/\S+/, () => StorageManager.pickPromoLink() || ''));
 
         elements.spintaxOutputList.innerHTML = '';
 
