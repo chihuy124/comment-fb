@@ -85,7 +85,16 @@ document.addEventListener('DOMContentLoaded', () => {
         if (stored) {
             try { return JSON.parse(stored); } catch(e) {}
         }
-        return ['xin link', 'tập 2', 'xem ở đâu', 'tên phim là gì', 'link full', 'xem tiếp', 'x tiếp', 'trọn bộ', 'tiếp đi'];
+        // Short, loose tokens on purpose: Vietnamese viewers phrase these many
+        // ways ("cho xin tên phim", "phim này tên gì", "hóng tập"), so matching
+        // on long exact phrases like "tên phim là gì" misses most of them.
+        return [
+            'xin link', 'cho xin', 'link full', 'link phim',
+            'tên phim', 'tên gì', 'phim gì',
+            'tập 2', 'tập tiếp', 'tập sau', 'hóng tập', 'phần 2',
+            'xem tiếp', 'x tiếp', 'tiếp đi', 'xem tiep',
+            'trọn bộ', 'full bộ', 'xem ở đâu', 'ở đâu',
+        ];
     }
 
     function saveIntentKeywords(keywords) {
@@ -532,6 +541,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     tag: 'Feed FB + Comment thật',
                     intentCount: matched.length,
                     intentComments: matched.length ? matched : (comments || []).slice(0, 5),
+                    commentCount: (comments || []).length,
                     source: 'fb_feed_scraped',
                 });
                 existingSet.add(url);
@@ -566,9 +576,25 @@ document.addEventListener('DOMContentLoaded', () => {
         // Filtering happens entirely client-side now (no backend involved).
         let displayItems = scannedItems.filter(item => (item.intentCount || 0) >= minIntent);
         const belowThreshold = scannedItems.length - displayItems.length;
+        const beforeHide = displayItems.length;
 
         if (shouldHideCommented) {
             displayItems = displayItems.filter(item => !existingUrls.has(item.url));
+        }
+        const hiddenAsDuplicate = beforeHide - displayItems.length;
+
+        // Always explain the funnel — otherwise "scraped 12, shows 1" looks broken.
+        if (scannedItems.length > 0) {
+            const summary = document.createElement('div');
+            summary.style.cssText = 'padding:0.6rem 0.85rem; margin-bottom:0.85rem; background:var(--bg-surface); border-radius:8px; font-size:0.82rem; color:var(--text-secondary); line-height:1.6;';
+            summary.innerHTML = `
+                <strong>Đã quét ${scannedItems.length} Reels</strong> ·
+                <span style="color:#22c55e;">${displayItems.length} hiện ra</span> ·
+                <span style="color:var(--text-muted);">${belowThreshold} dưới ngưỡng ${minIntent} người hỏi</span>
+                ${hiddenAsDuplicate > 0 ? ` · <span style="color:var(--text-muted);">${hiddenAsDuplicate} đã có trong Bảng Seeding</span>` : ''}
+                ${belowThreshold > 0 ? `<br><span style="color:var(--text-muted);">Đặt "Số người comment hỏi tối thiểu" về 0 để xem hết và kiểm tra comment đã đọc được.</span>` : ''}
+            `;
+            elements.scannedResultsContainer.appendChild(summary);
         }
 
         if (displayItems.length === 0) {
@@ -580,9 +606,9 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 msg = 'Tất cả các bài Reels đạt tiêu chí đều đã có trong Bảng Seeding của bạn (Đã ẩn trùng).';
             }
-            elements.scannedResultsContainer.innerHTML = `
-                <div class="empty-state" style="padding:2rem 1rem;"><p>${msg}</p></div>
-            `;
+            // Append (not innerHTML=) so the summary above stays visible
+            elements.scannedResultsContainer.insertAdjacentHTML('beforeend',
+                `<div class="empty-state" style="padding:2rem 1rem;"><p>${msg}</p></div>`);
             elements.btnImportScannedAll.disabled = true;
             return;
         }
@@ -611,10 +637,15 @@ document.addEventListener('DOMContentLoaded', () => {
                     </div>
                 </div>
                 <div style="font-size:0.82rem; color:var(--text-secondary); background:var(--bg-surface); padding:0.6rem 0.85rem; border-radius:6px; width:100%;">
-                    <strong>Các comment bình luận THẬT của người xem:</strong>
+                    <strong>${item.intentCount > 0
+                        ? 'Các comment bình luận THẬT của người xem:'
+                        : `Không comment nào khớp từ khóa. ${item.commentCount || 0} comment đã đọc, xem thử vài cái:`}</strong>
                     <ul style="margin:0.4rem 0 0 1.2rem; padding:0;">
                         ${item.intentComments.map(c => `<li><code>${escapeHtml(c)}</code></li>`).join('')}
                     </ul>
+                    ${typeof item.commentCount === 'number'
+                        ? `<div style="margin-top:0.4rem; color:var(--text-muted); font-size:0.75rem;">Đã đọc ${item.commentCount} comment · khớp ${item.intentCount}</div>`
+                        : ''}
                 </div>
                 ${isAlreadyAdded 
                     ? `<button class="btn btn-secondary btn-sm" disabled style="opacity:0.6;">✓ Đã trong Bảng Seeding</button>`
