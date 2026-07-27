@@ -147,7 +147,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Page titles mapping
     const TAB_TITLES = {
-        'dashboard-tab': { title: 'Bảng điều khiển Seeding 1-Click', subtitle: 'Nhấn nút "Copy & Mở bài", dán nội dung (Ctrl+V) và bấm Đăng comment an toàn.' },
+        'dashboard-tab': { title: 'Bảng điều khiển Seeding 1-Click', subtitle: 'Bấm "Tự Động Comment" để extension mở bài và đăng giúp bạn. Mỗi lần bấm là một comment — nhịp độ do bạn quyết định.' },
         'posts-tab': { title: 'Quản lý danh sách bài viết mục tiêu', subtitle: 'Thêm, sửa, xóa các bài viết Facebook của người khác / Group cần seeding.' },
         'spintax-tab': { title: 'Bộ mẫu & Trình tạo Spintax Phim', subtitle: 'Thiết lập cú pháp {A|B|C} và {link_fb} để tạo hàng ngàn câu comment biến thể không trùng lặp.' },
         'scanner-tab': { title: 'Quét Reels Phim & Phân Tích Comment Nhu Cầu Cao 🔥', subtitle: 'Tự động lọc các video Reels đang có nhiều người comment hỏi xin link / hỏi tập 2.' },
@@ -272,13 +272,18 @@ document.addEventListener('DOMContentLoaded', () => {
                     </button>
                 </div>
 
-                <div class="card-actions-row">
-                    <button class="btn btn-copy-launch btn-action-copy-launch" data-id="${post.id}">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                        <span>1-Click Copy & Mở Bài</span>
+                <div class="card-actions-row" style="flex-wrap:wrap; gap:0.4rem;">
+                    <button class="btn btn-copy-launch btn-action-auto-comment" data-id="${post.id}"
+                            title="${extensionReady ? 'Mở bài và tự động đăng comment này' : 'Cần cài Chrome Extension trước'}"
+                            ${extensionReady ? '' : 'disabled style="opacity:0.55;"'}>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"></path></svg>
+                        <span>Tự Động Comment</span>
                     </button>
 
-                    ${post.status === 'COMPLETED' 
+                    <button class="btn btn-secondary btn-sm btn-action-copy-launch" data-id="${post.id}"
+                            title="Cách thủ công: copy nội dung rồi mở bài để tự dán">Copy & Mở</button>
+
+                    ${post.status === 'COMPLETED'
                         ? `<button class="btn btn-secondary btn-sm btn-mark-pending" data-id="${post.id}" title="Đánh dấu chờ làm lại">Chờ lại</button>`
                         : `<button class="btn btn-secondary btn-sm btn-mark-complete" data-id="${post.id}" title="Đánh dấu đã đăng">Đã xong</button>`
                     }
@@ -293,6 +298,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Bind card action buttons
     function bindCardActionEvents() {
+        document.querySelectorAll('.btn-action-auto-comment').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                autoCommentOnPost(e.currentTarget.getAttribute('data-id'), e.currentTarget);
+            });
+        });
+
         document.querySelectorAll('.btn-action-copy-launch').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 const postId = e.currentTarget.getAttribute('data-id');
@@ -444,7 +455,17 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- EXTENSION BRIDGE ---
     const EXT_TAG = 'FB_SEEDING_EXT';
 
+    let lastKnownExtReady = null;
+
     function updateExtensionBanner() {
+        // Dashboard cards render their auto-comment button enabled or disabled
+        // based on extensionReady, and the extension announces itself after the
+        // first render — so re-render the cards whenever readiness flips.
+        if (lastKnownExtReady !== extensionReady) {
+            lastKnownExtReady = extensionReady;
+            renderDashboardCards();
+        }
+
         if (!elements.extStatusBanner) return;
         if (extensionReady) {
             elements.extStatusBanner.innerHTML = `<span style="color:#22c55e;">✅ Extension đã kết nối (v${extensionVersion || '?'}). Có thể Discover Reels + cào Comment thật từ session FB của bạn.</span>`;
@@ -500,6 +521,91 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function scrapeIdFromRequest() {
         return `req_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+    }
+
+    // --- AUTO COMMENT (one click = one comment) ---
+    // Nothing is posted without a deliberate click on this button: the click is
+    // the authorisation for that one comment. Rate is whatever the user's own
+    // clicking pace is, which is what keeps it from looking like a bot run.
+    const COMMENT_ERROR_TEXT = {
+        no_comment_panel: 'Không mở được ô bình luận — Reel có thể đã tắt bình luận.',
+        no_composer: 'Không tìm thấy ô soạn bình luận trên trang.',
+        insert_failed: 'Không gõ được nội dung vào ô bình luận.',
+        insert_partial: 'Nội dung vào ô không đầy đủ nên đã hủy, tránh đăng thiếu.',
+        url_drifted: 'Facebook nhảy sang Reel khác nên đã hủy, tránh comment nhầm bài.',
+        submit_failed: 'Đã điền nội dung nhưng Facebook không nhận. Tab đang mở để bạn bấm gửi thủ công.',
+        timeout: 'Quá thời gian chờ. Tab đang mở để bạn kiểm tra.',
+        tab_create_failed: 'Không mở được tab Facebook.',
+        empty_text: 'Comment đang trống — hãy tạo nội dung trước.',
+    };
+
+    async function autoCommentOnPost(postId, btnEl) {
+        if (!extensionReady) {
+            showToast('Cần cài Chrome Extension để tự động comment. Xem tab Cài đặt.', 'warning');
+            return;
+        }
+        const post = StorageManager.getPosts().find(p => p.id === postId);
+        if (!post) return;
+        if (!post.currentComment || !post.currentComment.trim()) {
+            showToast('Bài này chưa có nội dung comment. Bấm nút đổi biến thể để sinh nội dung.', 'warning');
+            return;
+        }
+
+        const originalHtml = btnEl ? btnEl.innerHTML : null;
+        if (btnEl) {
+            btnEl.disabled = true;
+            btnEl.innerHTML = '<span>Đang đăng...</span>';
+        }
+        showToast('Đang mở bài và đăng comment...', 'info');
+
+        const requestId = scrapeIdFromRequest();
+        const done = new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('Quá thời gian chờ extension.')), 150000);
+            const listener = (e) => {
+                if (e.source !== window) return;
+                const msg = e.data;
+                if (!msg || msg.source !== EXT_TAG || msg.requestId !== requestId) return;
+                if (msg.type === 'COMMENT_DONE') {
+                    clearTimeout(timeout);
+                    window.removeEventListener('message', listener);
+                    resolve(msg.response);
+                } else if (msg.type === 'COMMENT_ERROR') {
+                    clearTimeout(timeout);
+                    window.removeEventListener('message', listener);
+                    reject(new Error(msg.error));
+                }
+            };
+            window.addEventListener('message', listener);
+        });
+
+        window.postMessage({
+            source: EXT_TAG, type: 'POST_COMMENT', requestId,
+            url: post.url, text: post.currentComment,
+        }, '*');
+
+        try {
+            const res = await done;
+            if (res?.ok) {
+                StorageManager.updatePostStatus(postId, 'COMPLETED');
+                showToast('Đã đăng comment thành công!', 'success');
+                renderAll();
+            } else {
+                const why = COMMENT_ERROR_TEXT[res?.error] || res?.hint || res?.error || 'Không rõ nguyên nhân';
+                showToast(`Chưa đăng được: ${why}`, 'warning');
+                // Status stays PENDING so the post is not silently lost
+                if (btnEl) {
+                    btnEl.disabled = false;
+                    btnEl.innerHTML = originalHtml;
+                }
+            }
+        } catch (err) {
+            console.error(err);
+            showToast(`Lỗi khi đăng comment: ${err.message}`, 'warning');
+            if (btnEl) {
+                btnEl.disabled = false;
+                btnEl.innerHTML = originalHtml;
+            }
+        }
     }
 
     // --- REEL HUNTER ---

@@ -23,6 +23,11 @@
       chrome.runtime.sendMessage({ type: 'HARVEST_RESULT', urls });
       return;
     }
+    if (mission.mode === 'comment') {
+      const res = await postComment(mission.text, mission.reelId);
+      chrome.runtime.sendMessage({ type: 'COMMENT_RESULT', url: location.href, ...res });
+      return;
+    }
     if (mission.mode === 'scrape') {
       await sleep(2000);
       const comments = await scrapeComments();
@@ -183,6 +188,121 @@ function sweepReelUrls() {
   return found;
 }
 
+
+// ---------- COMMENT MODE (post one comment on this reel) ----------
+
+async function postComment(text, expectedReelId) {
+  if (!text || !String(text).trim()) return { ok: false, error: 'empty_text' };
+
+  console.log('[FB Seeding CS] comment mode on', location.href);
+  await sleep(3000);
+  await dismissLoginNags();
+
+  const opened = await openCommentPanel();
+  if (!opened) {
+    return { ok: false, error: 'no_comment_panel', hint: 'Không mở được ô bình luận — có thể Reel đã tắt bình luận.' };
+  }
+
+  const box = findCommentComposer();
+  if (!box) {
+    return { ok: false, error: 'no_composer', hint: 'Không tìm thấy ô soạn bình luận.' };
+  }
+
+  // Facebook's composer submits on Enter, so a literal newline in the text
+  // would post a half-finished comment. Collapse them to spaces.
+  const oneLine = String(text).replace(/\s*\n+\s*/g, ' ').trim();
+
+  humanClick(box);
+  box.focus();
+  await sleep(500);
+
+  // FB uses Lexical; assigning textContent does nothing. insertText goes
+  // through the editor's own input handling.
+  document.execCommand('insertText', false, oneLine);
+  await sleep(900);
+
+  const typed = (box.innerText || '').trim();
+  if (!typed) {
+    return { ok: false, error: 'insert_failed', hint: 'Không gõ được vào ô bình luận.' };
+  }
+  // Guard against a partially-inserted comment
+  if (typed.length < Math.min(20, oneLine.length * 0.5)) {
+    return { ok: false, error: 'insert_partial', typed, hint: 'Nội dung vào ô không đầy đủ, đã hủy để không đăng thiếu.' };
+  }
+
+  // CRITICAL: make sure FB has not swapped the reel under us before we post.
+  if (expectedReelId && extractReelId(location.href) !== expectedReelId) {
+    return { ok: false, error: 'url_drifted', hint: 'Facebook đã nhảy sang Reel khác — đã hủy để không comment nhầm bài.' };
+  }
+
+  console.log('[FB Seeding CS] submitting comment...');
+  pressEnter(box);
+  await sleep(2500);
+
+  // Verify: FB clears the composer once a comment is accepted.
+  let emptied = !(box.innerText || '').trim();
+  if (!emptied) {
+    await sleep(2500);
+    emptied = !(box.innerText || '').trim();
+  }
+
+  if (emptied) {
+    console.log('[FB Seeding CS] comment posted');
+    return { ok: true, posted: oneLine };
+  }
+
+  // Composer still holds our text → try the explicit send control once.
+  const btn = findSendButton();
+  if (btn) {
+    humanClick(btn);
+    await sleep(2500);
+    if (!(box.innerText || '').trim()) {
+      console.log('[FB Seeding CS] comment posted via send button');
+      return { ok: true, posted: oneLine };
+    }
+  }
+
+  return {
+    ok: false,
+    error: 'submit_failed',
+    typed,
+    hint: 'Đã điền nội dung nhưng Facebook không nhận. Tab được giữ lại để bạn bấm gửi thủ công.',
+  };
+}
+
+function findCommentComposer() {
+  const nodes = document.querySelectorAll('div[contenteditable="true"]');
+  for (const el of nodes) {
+    const label = (el.getAttribute('aria-label') || '').toLowerCase();
+    if (
+      label.includes('bình luận') || label.includes('comment') ||
+      label.includes('viết') || label.includes('write')
+    ) return el;
+  }
+  // Fall back to the first editable box that looks like an input
+  for (const el of nodes) {
+    if (el.getAttribute('role') === 'textbox') return el;
+  }
+  return nodes[0] || null;
+}
+
+function findSendButton() {
+  const wanted = ['bình luận', 'comment', 'gửi', 'send', 'post', 'đăng'];
+  for (const el of document.querySelectorAll('[aria-label][role="button"], div[role="button"][aria-label]')) {
+    const l = (el.getAttribute('aria-label') || '').trim().toLowerCase();
+    if (wanted.includes(l)) return el;
+  }
+  return null;
+}
+
+function pressEnter(el) {
+  const base = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
+  try {
+    el.dispatchEvent(new KeyboardEvent('keydown', base));
+    el.dispatchEvent(new KeyboardEvent('keypress', base));
+    el.dispatchEvent(new KeyboardEvent('keyup', base));
+  } catch (e) {}
+}
 
 // ---------- SCRAPE MODE (comments on a single Reel) ----------
 

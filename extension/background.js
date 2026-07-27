@@ -18,6 +18,7 @@ const missions = new Map();
 // tabId → resolvers for the caller-facing promise
 const pendingScrapes = new Map();
 const pendingHarvests = new Map();
+const pendingComments = new Map();
 
 // ---- Keep-alive: pinging chrome APIs every 20s keeps the MV3 service worker
 // awake during long-running discover/scrape operations. Only ticks while there
@@ -26,7 +27,7 @@ let keepAliveTimer = null;
 function ensureKeepAlive() {
   if (keepAliveTimer) return;
   keepAliveTimer = setInterval(() => {
-    if (missions.size === 0 && pendingScrapes.size === 0 && pendingHarvests.size === 0) {
+    if (missions.size === 0 && pendingScrapes.size === 0 && pendingHarvests.size === 0 && pendingComments.size === 0) {
       clearInterval(keepAliveTimer);
       keepAliveTimer = null;
       return;
@@ -115,6 +116,23 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false;
   }
 
+  // Content script reports the outcome of a comment attempt
+  if (msg?.type === 'COMMENT_RESULT' && sender.tab?.id != null) {
+    const p = pendingComments.get(sender.tab.id);
+    if (p) {
+      clearTimeout(p.timer);
+      pendingComments.delete(sender.tab.id);
+      p.resolve(msg);
+    }
+    return false;
+  }
+
+  // Web app asks to post one comment on one reel
+  if (msg?.type === 'POST_COMMENT') {
+    postCommentOnReel(msg.url, msg.text).then(sendResponse);
+    return true;
+  }
+
   // Web app starts / stops a hunt
   if (msg?.type === 'HUNT_REELS') {
     huntReels(msg.opts || {}, sender.tab?.id).then(sendResponse);
@@ -161,6 +179,63 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false;
   }
 });
+
+// ---- SINGLE COMMENT FLOW ----
+// One click in the web app = one comment. Opens the reel in a background tab,
+// lets the content script fill and submit the composer, then reports back.
+// On success the tab is closed; on failure it is brought to the front with the
+// text already filled in so the user can finish (or abandon) it by hand.
+async function postCommentOnReel(url, text) {
+  const canonical = canonicalReelUrl(url) || url;
+  const reelId = extractReelIdBg(canonical);
+  console.log('[BG][comment] opening', canonical);
+
+  let tab;
+  try {
+    tab = await chrome.tabs.create({ url: canonical, active: false });
+  } catch (e) {
+    return { ok: false, error: 'tab_create_failed' };
+  }
+  missions.set(tab.id, { mode: 'comment', text, reelId });
+  ensureKeepAlive();
+
+  const result = await new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      pendingComments.delete(tab.id);
+      resolve({ ok: false, error: 'timeout', hint: 'Hết thời gian chờ — tab được giữ lại để bạn kiểm tra.' });
+    }, 90000);
+    pendingComments.set(tab.id, {
+      resolve: (payload) => { clearTimeout(timer); resolve(payload); },
+      timer,
+    });
+  });
+
+  missions.delete(tab.id);
+  if (result.ok) {
+    chrome.tabs.remove(tab.id).catch(() => {});
+    console.log('[BG][comment] posted on', canonical);
+  } else {
+    // Surface the tab so the user can see exactly what happened
+    chrome.tabs.update(tab.id, { active: true }).catch(() => {});
+    console.warn('[BG][comment] failed on', canonical, '→', result.error);
+  }
+  return { ...result, url: canonical };
+}
+
+function extractReelIdBg(href) {
+  try {
+    const u = new URL(href, 'https://www.facebook.com');
+    const m = u.pathname.match(/^\/reels?\/(\d+)/);
+    if (m) return 'reel:' + m[1];
+    if (u.pathname.startsWith('/watch')) {
+      const v = u.searchParams.get('v');
+      if (v) return 'watch:' + v;
+    }
+    const vm = u.pathname.match(/^\/[^/]+\/videos\/(\d+)/);
+    if (vm) return 'video:' + vm[1];
+  } catch (e) {}
+  return null;
+}
 
 // ---- REEL HUNTER FLOW ----
 // Walk Facebook Reels one at a time: load a reel, scrape its comments, count

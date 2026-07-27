@@ -32,6 +32,26 @@
       return;
     }
 
+    if (msg.type === 'POST_COMMENT') {
+      try {
+        const response = await chrome.runtime.sendMessage({
+          type: 'POST_COMMENT',
+          url: msg.url,
+          text: msg.text,
+        });
+        window.postMessage(
+          { source: TAG, type: 'COMMENT_DONE', requestId: msg.requestId, response },
+          '*'
+        );
+      } catch (err) {
+        window.postMessage(
+          { source: TAG, type: 'COMMENT_ERROR', requestId: msg.requestId, error: String(err) },
+          '*'
+        );
+      }
+      return;
+    }
+
     if (msg.type === 'HUNT_REELS') {
       try {
         const response = await chrome.runtime.sendMessage({
