@@ -252,8 +252,14 @@
                 <div class="table-card">
                     <div class="table-header">
                         <h3>Danh sách bài viết mục tiêu (Bài của người khác/Group)</h3>
-                        <div class="table-actions">
-                            <button class="btn btn-secondary btn-sm" id="btn-select-all">Chọn tất cả</button>
+                        <div class="table-actions" style="display:flex; align-items:center; gap:0.6rem; flex-wrap:wrap;">
+                            <label for="posts-page-size" style="font-size:0.82rem; color:var(--text-muted);">Hiện</label>
+                            <select id="posts-page-size" class="select-control" style="width:auto;">
+                                <option value="20" selected>20</option>
+                                <option value="50">50</option>
+                                <option value="100">100</option>
+                            </select>
+                            <button class="btn btn-secondary btn-sm" id="btn-select-all" title="Chọn/bỏ chọn toàn bộ các bài đang hiện trên trang này">Chọn cả trang</button>
                             <button class="btn btn-danger btn-sm" id="btn-delete-selected" disabled>Xóa bài đã chọn</button>
                         </div>
                     </div>
@@ -274,6 +280,17 @@
                                 <!-- Data rows inserted dynamically -->
                             </tbody>
                         </table>
+                    </div>
+
+                    <div id="posts-pagination" style="display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap; padding:0.9rem 1.25rem; border-top:1px solid var(--border-color);">
+                        <span id="posts-page-info" style="font-size:0.82rem; color:var(--text-muted);"></span>
+                        <div style="display:flex; align-items:center; gap:0.4rem;">
+                            <button class="btn btn-secondary btn-sm" id="btn-posts-first" title="Trang đầu">«</button>
+                            <button class="btn btn-secondary btn-sm" id="btn-posts-prev" title="Trang trước">‹</button>
+                            <span id="posts-page-indicator" style="font-size:0.85rem; padding:0 0.5rem; min-width:90px; text-align:center;"></span>
+                            <button class="btn btn-secondary btn-sm" id="btn-posts-next" title="Trang sau">›</button>
+                            <button class="btn btn-secondary btn-sm" id="btn-posts-last" title="Trang cuối">»</button>
+                        </div>
                     </div>
                 </div>
             </div>

@@ -46,6 +46,14 @@ document.addEventListener('DOMContentLoaded', () => {
         checkAllPosts: document.getElementById('check-all-posts'),
         btnSelectAll: document.getElementById('btn-select-all'),
         btnDeleteSelected: document.getElementById('btn-delete-selected'),
+        postsPageSize: document.getElementById('posts-page-size'),
+        postsPagination: document.getElementById('posts-pagination'),
+        postsPageInfo: document.getElementById('posts-page-info'),
+        postsPageIndicator: document.getElementById('posts-page-indicator'),
+        btnPostsFirst: document.getElementById('btn-posts-first'),
+        btnPostsPrev: document.getElementById('btn-posts-prev'),
+        btnPostsNext: document.getElementById('btn-posts-next'),
+        btnPostsLast: document.getElementById('btn-posts-last'),
 
         // Modals
         btnOpenAddModal: document.getElementById('btn-open-add-modal'),
@@ -108,6 +116,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let huntRunning = false;
     let bulkRunning = false;
     let bulkAbort = false;
+    let postsPage = 1;
 
     function getStoredIntentKeywords() {
         const stored = localStorage.getItem('fb_intent_keywords');
@@ -389,9 +398,32 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // --- POSTS TABLE RENDER (TAB 2) ---
+    // lastActionAt has been written both as Date.now() and as an ISO string over
+    // time, so normalise before comparing. Missing values sort to the bottom.
+    function actionTime(post) {
+        if (!post || !post.lastActionAt) return 0;
+        const t = new Date(post.lastActionAt).getTime();
+        return Number.isFinite(t) ? t : 0;
+    }
+
+    function getSortedPosts() {
+        return StorageManager.getPosts().slice().sort((a, b) => actionTime(b) - actionTime(a));
+    }
+
     function renderPostsTable() {
-        const posts = StorageManager.getPosts();
+        const posts = getSortedPosts();
+        const pageSize = Math.max(1, parseInt(elements.postsPageSize?.value) || 20);
+        const totalPages = Math.max(1, Math.ceil(posts.length / pageSize));
+
+        // Deleting rows or shrinking the page size can leave us past the end
+        if (postsPage > totalPages) postsPage = totalPages;
+        if (postsPage < 1) postsPage = 1;
+
+        const start = (postsPage - 1) * pageSize;
+        const pageItems = posts.slice(start, start + pageSize);
+
         elements.postsTableBody.innerHTML = '';
+        renderPostsPagination(posts.length, totalPages, start, pageItems.length);
 
         if (posts.length === 0) {
             elements.postsTableBody.innerHTML = `
@@ -404,7 +436,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        posts.forEach(post => {
+        pageItems.forEach(post => {
             const tr = document.createElement('tr');
             
             const categoryNames = {
@@ -432,7 +464,35 @@ document.addEventListener('DOMContentLoaded', () => {
             elements.postsTableBody.appendChild(tr);
         });
 
+        // Header checkbox only ever reflects the rows currently on screen
+        if (elements.checkAllPosts) elements.checkAllPosts.checked = false;
+        updateDeleteSelectedButtonState();
         bindTableEvents();
+    }
+
+    function renderPostsPagination(total, totalPages, start, shown) {
+        if (elements.postsPageInfo) {
+            elements.postsPageInfo.textContent = total === 0
+                ? 'Không có bài viết nào'
+                : `Hiện ${start + 1}–${start + shown} trên tổng ${total} bài · mới nhất lên đầu`;
+        }
+        if (elements.postsPageIndicator) {
+            elements.postsPageIndicator.textContent = `Trang ${postsPage}/${totalPages}`;
+        }
+        const atFirst = postsPage <= 1;
+        const atLast = postsPage >= totalPages;
+        if (elements.btnPostsFirst) elements.btnPostsFirst.disabled = atFirst;
+        if (elements.btnPostsPrev) elements.btnPostsPrev.disabled = atFirst;
+        if (elements.btnPostsNext) elements.btnPostsNext.disabled = atLast;
+        if (elements.btnPostsLast) elements.btnPostsLast.disabled = atLast;
+        if (elements.postsPagination) {
+            elements.postsPagination.style.display = total === 0 ? 'none' : 'flex';
+        }
+    }
+
+    function gotoPostsPage(page) {
+        postsPage = page;
+        renderPostsTable();
     }
 
     function bindTableEvents() {
@@ -1342,6 +1402,20 @@ document.addEventListener('DOMContentLoaded', () => {
             renderScannedResults();
             switchTab('dashboard-tab');
         });
+
+        // Posts table pagination
+        if (elements.postsPageSize) {
+            elements.postsPageSize.addEventListener('change', () => gotoPostsPage(1));
+        }
+        if (elements.btnPostsFirst) elements.btnPostsFirst.addEventListener('click', () => gotoPostsPage(1));
+        if (elements.btnPostsPrev) elements.btnPostsPrev.addEventListener('click', () => gotoPostsPage(postsPage - 1));
+        if (elements.btnPostsNext) elements.btnPostsNext.addEventListener('click', () => gotoPostsPage(postsPage + 1));
+        if (elements.btnPostsLast) {
+            elements.btnPostsLast.addEventListener('click', () => {
+                const pageSize = Math.max(1, parseInt(elements.postsPageSize?.value) || 20);
+                gotoPostsPage(Math.max(1, Math.ceil(StorageManager.getPosts().length / pageSize)));
+            });
+        }
 
         // Check All Posts in Table
         elements.checkAllPosts.addEventListener('change', (e) => {
