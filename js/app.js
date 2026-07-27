@@ -54,6 +54,7 @@ document.addEventListener('DOMContentLoaded', () => {
         btnQuickSpintaxTest: document.getElementById('btn-quick-spintax-test'),
 
         // Tab 5: Scanner Elements
+        scanKeywordInput: document.getElementById('scan-keyword-input'),
         minIntentCount: document.getElementById('min-intent-count'),
         scannedResultsContainer: document.getElementById('scanned-results-container'),
         btnImportScannedAll: document.getElementById('btn-import-scanned-all'),
@@ -480,10 +481,12 @@ document.addEventListener('DOMContentLoaded', () => {
         // Total budget for the extension: ~22s walking the feed to harvest a
         // URL queue, then background navigates tabs through that queue.
         const durationMs = 210000; // 3.5 min → typically 20-35 reels
+        const keywords = (elements.scanKeywordInput?.value || '')
+            .split(',').map(k => k.trim()).filter(Boolean);
         const requestId = scrapeIdFromRequest();
         elements.btnDiscoverFeed.disabled = true;
         elements.btnDiscoverFeed.innerHTML = `<span>🚀 Đang cào feed FB (~${durationMs/1000}s)...</span>`;
-        showToast(`Extension mở tab ẩn FB, mỗi Reel cào comment thật ngay tại chỗ rồi mới sang Reel tiếp. Chạy ~${durationMs/1000}s. Đảm bảo đã login FB.`, 'info');
+        showToast(`Extension mở tab ẩn: thu thập Reels từ feed Watch${keywords.length ? ` + tìm kiếm "${keywords.join('", "')}"` : ''}, rồi cào comment thật từng Reel. Chạy ~${durationMs/1000}s. Đảm bảo đã login FB.`, 'info');
 
         const done = new Promise((resolve, reject) => {
             const timeout = setTimeout(() => reject(new Error('discover_timeout')), durationMs + 90000);
@@ -504,7 +507,7 @@ document.addEventListener('DOMContentLoaded', () => {
             window.addEventListener('message', listener);
         });
 
-        window.postMessage({ source: EXT_TAG, type: 'DISCOVER_REELS', requestId, durationMs }, '*');
+        window.postMessage({ source: EXT_TAG, type: 'DISCOVER_REELS', requestId, durationMs, keywords }, '*');
 
         try {
             const response = await done;

@@ -28,6 +28,7 @@
           type: 'DISCOVER_REELS',
           durationMs: msg.durationMs || 45000,
           startUrl: msg.startUrl,
+          keywords: msg.keywords || [],
         });
         window.postMessage(
           { source: TAG, type: 'DISCOVER_RESULT', requestId: msg.requestId, response },

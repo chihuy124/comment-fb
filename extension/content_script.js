@@ -18,8 +18,9 @@
     console.log('[FB Seeding CS] mission =', mission);
     if (!mission || !mission.mode) return;
 
-    if (mission.mode === 'discover') {
-      await discoverMode(mission.durationMs || 45000);
+    if (mission.mode === 'harvest') {
+      const urls = await harvestMode(mission.durationMs || 20000);
+      chrome.runtime.sendMessage({ type: 'HARVEST_RESULT', urls });
       return;
     }
     if (mission.mode === 'scrape') {
@@ -61,51 +62,100 @@ function canonicalize(href) {
 
 // ---------- DISCOVER MODE ----------
 
-async function discoverMode(durationMs) {
-  // Pure harvest phase: scroll the Watch feed and collect every reel/video
-  // permalink we can see. No scraping here — background then navigates each
-  // URL individually, which is both reliable and guarantees the comments it
-  // reads belong to that reel.
-  console.log('[FB Seeding CS] harvest phase start, duration =', durationMs);
-  const queue = new Set();
+async function harvestMode(durationMs) {
+  // Scroll whatever feed/search page we were navigated to and collect every
+  // reel/video permalink present. No scraping here — background navigates each
+  // harvested URL individually afterwards, which is what guarantees the
+  // comments it reads belong to that reel.
+  console.log('[FB Seeding CS] harvest start on', location.href, 'for', durationMs, 'ms');
+  const found = new Set();
   const endTime = Date.now() + durationMs;
   let idleRounds = 0;
 
-  await sleep(3500);
-  sweepReelUrls().forEach((u) => queue.add(u));
-  console.log('[FB Seeding CS] initial sweep:', queue.size);
+  await sleep(3000);
+  sweepReelUrls().forEach((u) => found.add(u));
+  console.log('[FB Seeding CS] initial sweep:', found.size);
 
   while (Date.now() < endTime) {
-    const before = queue.size;
+    const before = found.size;
+    scrollFeed();
+    await sleep(1500);
+    sweepReelUrls().forEach((u) => found.add(u));
 
-    // Scroll the feed to lazy-load more cards, plus an arrow-down nudge in
-    // case we're on the vertical /reel/ layout instead.
-    window.scrollBy(0, window.innerHeight * 0.9);
-    await advanceToNextReel();
-    await sleep(1600);
-    sweepReelUrls().forEach((u) => queue.add(u));
-
-    if (queue.size === before) {
+    if (found.size === before) {
       idleRounds++;
-      if (idleRounds >= 6) {
-        console.log('[FB Seeding CS] no new URLs for 6 rounds — stopping harvest');
+      if (idleRounds >= 8) {
+        console.log('[FB Seeding CS] 8 idle rounds — stopping harvest');
         break;
       }
     } else {
       idleRounds = 0;
-      chrome.runtime.sendMessage({ type: 'DISCOVER_PROGRESS', count: queue.size });
+      console.log('[FB Seeding CS]   harvest at', found.size);
+      chrome.runtime.sendMessage({ type: 'DISCOVER_PROGRESS', count: found.size });
     }
   }
 
-  const pending = Array.from(queue);
-  console.log('[FB Seeding CS] harvest done:', pending.length, 'URLs');
-  chrome.runtime.sendMessage({ type: 'DISCOVER_RESULT', reels: [], queue: pending });
+  const urls = Array.from(found);
+  console.log('[FB Seeding CS] harvest done:', urls.length, 'URLs from', location.href);
+  return urls;
+}
+
+function findFeedScroller() {
+  // Facebook's Watch feed and search results scroll an INNER container, not
+  // the window — window.scrollBy() there is a no-op, which is why lazy-loading
+  // never fired and harvesting stalled at the first screenful.
+  let best = null;
+  let bestHeight = 0;
+  for (const el of document.querySelectorAll('div')) {
+    const cs = getComputedStyle(el);
+    if (!/auto|scroll/.test(cs.overflowY)) continue;
+    if (el.clientHeight < 300) continue;
+    if (el.scrollHeight <= el.clientHeight + 50) continue;
+    if (el.scrollHeight > bestHeight) {
+      bestHeight = el.scrollHeight;
+      best = el;
+    }
+  }
+  return best;
+}
+
+function scrollFeed() {
+  // Drive every plausible scroller: the window, the tallest inner scroll
+  // container, and document.scrollingElement.
+  const step = Math.max(600, window.innerHeight * 0.85);
+  try { window.scrollBy(0, step); } catch (_) {}
+
+  const scroller = findFeedScroller();
+  if (scroller) {
+    try { scroller.scrollTop = scroller.scrollTop + step; } catch (_) {}
+  }
+  const se = document.scrollingElement;
+  if (se) {
+    try { se.scrollTop = se.scrollTop + step; } catch (_) {}
+  }
+
+  // Vertical reel viewer responds to ArrowDown / the next-reel control
+  nudgeNextReel();
+}
+
+function nudgeNextReel() {
+  const labels = ['next reel', 'reel tiếp theo', 'next video', 'video tiếp theo', 'reel kế tiếp'];
+  for (const el of document.querySelectorAll('[aria-label]')) {
+    const l = (el.getAttribute('aria-label') || '').toLowerCase();
+    if (labels.includes(l)) {
+      try { el.click(); return; } catch (_) {}
+    }
+  }
+  const opts = { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, which: 40, bubbles: true, cancelable: true };
+  try {
+    (document.activeElement || document.body).dispatchEvent(new KeyboardEvent('keydown', opts));
+    window.dispatchEvent(new KeyboardEvent('keydown', opts));
+  } catch (_) {}
 }
 
 function sweepReelUrls() {
-  // Harvest every reel/watch permalink currently present in the DOM:
-  // anchors, the live location, plus a regex pass over raw HTML to catch
-  // lazily-rendered React props.
+  // Anchors first (cheap + precise), then a regex pass over the serialized DOM
+  // to catch permalinks that only exist inside React props / lazy markup.
   const found = new Set();
   const cur = canonicalize(location.href);
   if (cur) found.add(cur);
@@ -115,39 +165,19 @@ function sweepReelUrls() {
     if (c) found.add(c);
   });
 
-  const html = document.documentElement.outerHTML.slice(0, 800000);
+  const html = document.body ? document.body.innerHTML.slice(0, 3000000) : '';
   (html.match(/\/reels?\/(\d{8,})/g) || []).forEach((m) => {
     found.add('https://www.facebook.com/reel/' + m.replace(/^\/reels?\//, ''));
   });
   (html.match(/\/watch\/?\?v=(\d{8,})/g) || []).forEach((m) => {
     found.add('https://www.facebook.com/watch/?v=' + m.match(/(\d{8,})/)[1]);
   });
+  // Escaped forms that show up in inline JSON payloads
+  (html.match(/watch%2F%3Fv%3D(\d{8,})/g) || []).forEach((m) => {
+    found.add('https://www.facebook.com/watch/?v=' + m.match(/(\d{8,})/)[1]);
+  });
 
   return found;
-}
-
-async function advanceToNextReel() {
-  // Try three techniques — different FB layouts respond to different ones.
-  // 1) Click the down chevron button
-  const downBtns = Array.from(document.querySelectorAll('[aria-label]'))
-    .filter((el) => {
-      const l = (el.getAttribute('aria-label') || '').toLowerCase();
-      return l === 'next reel' || l === 'reel tiếp theo' || l === 'next video' ||
-             l === 'video tiếp theo' || l === 'reel kế tiếp';
-    });
-  for (const b of downBtns.slice(0, 1)) {
-    try { b.click(); return; } catch (_) {}
-  }
-
-  // 2) Arrow-Down keyboard event
-  const opts = { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, which: 40, bubbles: true, cancelable: true };
-  try {
-    (document.activeElement || document.body).dispatchEvent(new KeyboardEvent('keydown', opts));
-    window.dispatchEvent(new KeyboardEvent('keydown', opts));
-  } catch (_) {}
-
-  // 3) Scroll one viewport (covers /watch/ layout)
-  window.scrollBy(0, window.innerHeight);
 }
 
 

@@ -17,7 +17,7 @@ async function getSettings() {
 const missions = new Map();
 // tabId → resolvers for the caller-facing promise
 const pendingScrapes = new Map();
-const pendingDiscovers = new Map();
+const pendingHarvests = new Map();
 
 // ---- Keep-alive: pinging chrome APIs every 20s keeps the MV3 service worker
 // awake during long-running discover/scrape operations. Only ticks while there
@@ -26,7 +26,7 @@ let keepAliveTimer = null;
 function ensureKeepAlive() {
   if (keepAliveTimer) return;
   keepAliveTimer = setInterval(() => {
-    if (missions.size === 0 && pendingScrapes.size === 0 && pendingDiscovers.size === 0) {
+    if (missions.size === 0 && pendingScrapes.size === 0 && pendingHarvests.size === 0) {
       clearInterval(keepAliveTimer);
       keepAliveTimer = null;
       return;
@@ -117,24 +117,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   // Web app kicks off feed discovery
   if (msg?.type === 'DISCOVER_REELS') {
-    discoverFromFeed(msg.durationMs || 45000, msg.startUrl).then(sendResponse);
+    discoverFromFeed(msg.durationMs || 45000, msg.startUrl, msg.keywords).then(sendResponse);
     return true;
   }
 
-  // Content script reports discover done: reels scraped in-tab + queued URLs
-  if (msg?.type === 'DISCOVER_RESULT' && sender.tab?.id != null) {
-    const p = pendingDiscovers.get(sender.tab.id);
+  // Content script reports the reel URLs it harvested from a feed/search page
+  if (msg?.type === 'HARVEST_RESULT' && sender.tab?.id != null) {
+    const p = pendingHarvests.get(sender.tab.id);
     if (p) {
       clearTimeout(p.timer);
-      pendingDiscovers.delete(sender.tab.id);
-      if (!p.keepTab) {
-        missions.delete(sender.tab.id);
-        chrome.tabs.remove(sender.tab.id).catch(() => {});
-      }
-      p.resolve({
-        reels: msg.reels || [],
-        queue: msg.queue || msg.urls || [],
-      });
+      pendingHarvests.delete(sender.tab.id);
+      p.resolve(msg.urls || []);
     }
     return false;
   }
@@ -162,52 +155,63 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 // How long the in-tab feed-walking phase runs before we switch to
 // background-driven URL navigation (which is far more reliable).
-const DISCOVER_PHASE_MS = 30000;
+const HARVEST_MS_PER_SOURCE = 20000;
 
-async function discoverFromFeed(totalBudgetMs, startUrl) {
+// Pages worth harvesting reel URLs from. The Watch feed gives whatever FB's
+// algorithm serves this account; search pages give topically targeted results
+// (FB search works fine here because we're a real logged-in browser).
+function buildHarvestTargets(keywords) {
+  const targets = ['https://www.facebook.com/watch/'];
+  for (const kw of keywords || []) {
+    const q = encodeURIComponent(kw);
+    targets.push(`https://www.facebook.com/search/videos/?q=${q}`);
+  }
+  return targets;
+}
+
+async function discoverFromFeed(totalBudgetMs, startUrl, keywords) {
   const overallDeadline = Date.now() + totalBudgetMs;
-  // Must be a FEED page, not /reel/ — the vertical reel viewer only ever holds
-  // one reel in its DOM, so there is nothing to harvest there. /watch/ renders
-  // a grid of video cards whose anchors give us many permalinks.
-  const url = startUrl || 'https://www.facebook.com/watch/';
-  console.log('[BG] discoverFromFeed start, url=', url, 'budget=', totalBudgetMs);
+  const targets = startUrl ? [startUrl] : buildHarvestTargets(keywords);
+  console.log('[BG] discover start, budget=', totalBudgetMs, 'sources=', targets.length);
 
   let tab;
   try {
-    tab = await chrome.tabs.create({ url, active: false });
-    console.log('[BG] discover tab id=', tab.id);
+    tab = await chrome.tabs.create({ url: 'about:blank', active: false });
+    console.log('[BG] harvest tab id=', tab.id);
   } catch (e) {
     console.error('[BG] tab create failed:', e);
     return { ok: false, error: 'tab_create_failed', reels: [] };
   }
-  missions.set(tab.id, { mode: 'discover', durationMs: DISCOVER_PHASE_MS });
   ensureKeepAlive();
 
-  // --- Phase A: content script walks the feed, scrapes what it can, and
-  // returns the URL queue it harvested from the DOM. ---
-  const first = await new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      pendingDiscovers.delete(tab.id);
-      console.warn('[BG] discover phase timeout tab=', tab.id);
-      resolve({ reels: [], queue: [] });
-    }, DISCOVER_PHASE_MS + 30000);
-    pendingDiscovers.set(tab.id, {
-      resolve: (data) => { clearTimeout(timer); resolve(data); },
-      timer,
-      keepTab: true, // reuse this tab for phase B
-    });
-  });
+  // --- Phase A: harvest URLs from each source page in turn. ---
+  const queueSet = new Set();
+  for (const target of targets) {
+    // Always leave at least a minute for the scraping phase
+    if (Date.now() > overallDeadline - 60000) {
+      console.log('[BG] harvest budget spent, skipping remaining sources');
+      break;
+    }
+    const urls = await navigateAndHarvest(tab.id, target, HARVEST_MS_PER_SOURCE + 25000);
+    urls.forEach((u) => queueSet.add(u));
+    console.log(`[BG] harvested ${urls.length} from ${target} → total ${queueSet.size}`);
+  }
 
-  const collected = (first.reels || []).filter((r) => r && r.url);
-  const seen = new Set(collected.map((r) => r.url));
-  const queue = (first.queue || []).filter((u) => u && !seen.has(u));
-  console.log('[BG] phase A done: scraped', collected.length, '| queue', queue.length);
+  const collected = [];
+  const queue = Array.from(queueSet);
+  console.log('[BG] phase A done: queue', queue.length);
 
-  // --- Phase B: drive the queue by navigating tabs URL-by-URL. Each page
-  // load shows exactly one reel, so scraped comments can never belong to a
-  // neighbouring reel. Uses a few tabs as parallel lanes. ---
+  if (queue.length === 0) {
+    chrome.tabs.remove(tab.id).catch(() => {});
+    return { ok: true, reels: [] };
+  }
+
+  // --- Phase B: navigate tabs through the queue URL-by-URL. Each page load
+  // shows exactly one reel, so scraped comments can never belong to a
+  // neighbouring reel. Lanes are created to match the real queue size. ---
   const settings = await getSettings();
-  const lanes = Math.max(1, Math.min(4, settings.concurrent || 3));
+  const wantLanes = Math.max(1, Math.min(4, settings.concurrent || 3));
+  const lanes = Math.min(wantLanes, queue.length);
   const laneTabs = [tab.id];
   for (let i = 1; i < lanes; i++) {
     try {
@@ -237,6 +241,29 @@ async function discoverFromFeed(totalBudgetMs, startUrl) {
   }
   console.log('[BG] discover+scrape complete, reels =', collected.length);
   return { ok: true, reels: collected };
+}
+
+// Navigate a tab to a feed/search page and wait for the content script to
+// report every reel URL it could harvest there. Tab stays open for reuse.
+function navigateAndHarvest(tabId, url, timeoutMs) {
+  return new Promise(async (resolve) => {
+    missions.set(tabId, { mode: 'harvest', durationMs: HARVEST_MS_PER_SOURCE });
+    try {
+      await chrome.tabs.update(tabId, { url });
+    } catch (e) {
+      resolve([]);
+      return;
+    }
+    const timer = setTimeout(() => {
+      pendingHarvests.delete(tabId);
+      console.warn('[BG] harvest timeout on', url);
+      resolve([]);
+    }, timeoutMs);
+    pendingHarvests.set(tabId, {
+      resolve: (urls) => { clearTimeout(timer); resolve(urls || []); },
+      timer,
+    });
+  });
 }
 
 // Navigate an existing tab to a reel URL and wait for its content script to
