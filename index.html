@@ -310,18 +310,11 @@
                                 </div>
                             </div>
 
-                            <!-- Multiple Search Keywords Input -->
-                            <div class="form-group">
-                                <label for="scan-keyword-input">Nhập từ khóa tìm kiếm Reels Phim (Có thể nhập nhiều từ khóa cách nhau bởi dấu phẩy):</label>
-                                <textarea id="scan-keyword-input" class="form-control" rows="2" placeholder="Ví dụ: review phim hay, phim chiếu rạp, tóm tắt phim...">review phim hay, phim chiếu rạp</textarea>
-                                <small class="form-help">Hệ thống sẽ tự động tìm kiếm qua tất cả các từ khóa bạn nhập.</small>
-                            </div>
-
-                            <!-- Custom Min Intent Number Input -->
+                            <!-- Min Intent filter (applied live to the result list) -->
                             <div class="form-group">
                                 <label for="min-intent-count">Số người comment hỏi tối thiểu (Tùy chỉnh con số bạn muốn):</label>
-                                <input type="number" id="min-intent-count" class="form-control" value="2" min="1" max="100" placeholder="Nhập số người tối thiểu (ví dụ: 1, 2, 5, 10)...">
-                                <small class="form-help">Chỉ giữ lại các bài Reels có ít nhất số lượng người comment hỏi từ mốc này trở lên.</small>
+                                <input type="number" id="min-intent-count" class="form-control" value="2" min="0" max="100" placeholder="Nhập số người tối thiểu (ví dụ: 1, 2, 5, 10)...">
+                                <small class="form-help">Chỉ hiện các bài Reels có ít nhất số lượng người comment hỏi từ mốc này trở lên. Đổi số là danh sách lọc lại ngay.</small>
                             </div>
 
                             <!-- Checkbox: Hide posts already in Seeding Board or Commented -->
@@ -332,10 +325,12 @@
                                 </label>
                             </div>
 
-                            <button class="btn btn-primary" id="btn-start-scan" style="width:100%; margin-top:0.5rem;">
-                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-                                <span>Tự Động Quét & Phân Tích Comment Reels</span>
-                            </button>
+                            <div class="form-group" style="margin-top:1rem; padding:0.75rem; background:var(--bg-surface); border-radius:8px;">
+                                <small class="form-help" style="margin:0;">
+                                    Bấm <strong>🚀 Discover + Cào Comment</strong> ở panel bên phải để extension mở tab ẩn,
+                                    đi qua feed Reels của bạn và cào comment thật của từng Reel.
+                                </small>
+                            </div>
                         </div>
                     </div>
 
@@ -345,9 +340,6 @@
                             <h3 style="flex:1; min-width:200px;">Kết quả Reels Tiềm Năng Cao (Đã lọc comment)</h3>
                             <button class="btn btn-secondary btn-sm" id="btn-discover-feed" disabled title="Yêu cầu extension. Mở tab ẩn feed FB, mỗi Reel cào ngay comment thật rồi mới sang Reel tiếp theo — không cần bấm Cào Comment nữa.">
                                 <span>🚀 Discover + Cào Comment</span>
-                            </button>
-                            <button class="btn btn-secondary btn-sm" id="btn-scrape-live-comments" disabled title="Yêu cầu cài extension FB Reel Comment Scraper">
-                                <span>🧩 Cào Comment Thật (qua Extension)</span>
                             </button>
                             <button class="btn btn-primary btn-sm" id="btn-import-scanned-all" disabled>
                                 <span>1-Click Đẩy Tất Cả Vào Bảng Seeding</span>
@@ -360,7 +352,7 @@
                             <div id="scanned-results-container" class="variant-box-list">
                                 <div class="empty-state" style="padding:2rem 1rem;">
                                     <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-                                    <p>Nhấn "Tự Động Quét & Phân Tích Comment Reels" để tìm các bài Reels đang có nhiều người xin link / hỏi tập 2.</p>
+                                    <p>Nhấn "🚀 Discover + Cào Comment" để extension đi qua feed Reels của bạn và tìm các bài đang có nhiều người xin link / hỏi tập 2.</p>
                                 </div>
                             </div>
                         </div>
@@ -371,32 +363,24 @@
             <!-- TAB 4: SETTINGS & DATA -->
             <div id="settings-tab" class="tab-content">
                 <div class="settings-grid">
-                    <!-- FB Cookie Configuration Card -->
+                    <!-- Extension setup card -->
                     <div class="card card-panel" style="grid-column: 1 / -1; border: 1px solid var(--accent-blue);">
                         <div class="card-header">
-                            <h3>🔑 Cấu hình Cookie Facebook (Để cào live 100% không bị chặn)</h3>
+                            <h3>🧩 Chrome Extension (bắt buộc để cào Reels)</h3>
                         </div>
                         <div class="card-body">
-                            <div class="form-group">
-                                <label for="input-fb-cookie">Chuỗi Cookie Facebook của bạn (Bấm F12 trên Facebook ➔ Network/Application ➔ Copy giá trị Cookie):</label>
-                                <textarea id="input-fb-cookie" class="form-control code-font" rows="3" placeholder="Dán chuỗi cookie (ví dụ: datr=...; c_user=1000...; xs=...)..."></textarea>
-                                <small class="form-help">Server sẽ gắn Cookie này vào mỗi lượt quét để vượt rào cản trang Login của Facebook, giúp cào 100% dữ liệu thật!</small>
-                            </div>
-                            <button class="btn btn-primary btn-sm" id="btn-save-fb-cookie">Lưu Cookie Facebook</button>
-                        </div>
-                    </div>
-
-                    <div class="card card-panel">
-                        <div class="card-header">
-                            <h3>Cấu hình Cloud API Scanner Backend</h3>
-                        </div>
-                        <div class="card-body">
-                            <div class="form-group">
-                                <label for="custom-cloud-api-url">Link Server Cloud Scanner API (Ví dụ Render/Railway/VPS của bạn):</label>
-                                <input type="text" id="custom-cloud-api-url" class="form-control code-font" placeholder="https://your-cloud-scanner.onrender.com/api/scan">
-                                <small class="form-help">Nếu bạn deploy file <code>server.py</code> lên Render/Railway/VPS, hãy dán đường link API vào đây để trang Vercel tự động gọi sang.</small>
-                            </div>
-                            <button class="btn btn-primary btn-sm" id="btn-save-cloud-api">Lưu Đường Link Cloud API</button>
+                            <small class="form-help" style="display:block; line-height:1.7;">
+                                Công cụ cào Reels chạy hoàn toàn qua Chrome Extension, dùng chính session Facebook
+                                bạn đang đăng nhập — không cần dán Cookie, không cần server.
+                                <br><br>
+                                <strong>Cài đặt:</strong> mở <code>chrome://extensions</code> → bật <em>Developer mode</em>
+                                → <em>Load unpacked</em> → chọn thư mục <code>extension/</code>.
+                                <br>
+                                <strong>Sau mỗi lần cập nhật extension:</strong> bấm 🔄 reload ở trang extensions,
+                                rồi hard-reload trang này (<code>Cmd/Ctrl + Shift + R</code>).
+                                <br><br>
+                                Cấu hình số tab song song và timeout: bấm vào icon extension trên thanh công cụ Chrome.
+                            </small>
                         </div>
                     </div>
 

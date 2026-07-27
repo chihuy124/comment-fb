@@ -3,9 +3,8 @@
 // open FB tab → content_script asks for mission → runs → reports back.
 
 const DEFAULT_SETTINGS = {
-  concurrent: 3,
-  perTabTimeoutMs: 45000,
-  delayBetweenBatchesMs: 1500,
+  concurrent: 3,        // parallel lanes walking the URL queue
+  perTabTimeoutMs: 45000, // max time to wait for one reel's comments
 };
 
 async function getSettings() {
@@ -101,12 +100,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false;
   }
 
-  // Web app kicks off scraping
-  if (msg?.type === 'SCRAPE_URLS') {
-    scrapeMany(msg.urls || []).then(sendResponse);
-    return true;
-  }
-
   // Content script reports scrape done
   if (msg?.type === 'SCRAPE_RESULT' && sender.tab?.id != null) {
     const p = pendingScrapes.get(sender.tab.id);
@@ -164,51 +157,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false;
   }
 });
-
-// ---- SCRAPE FLOW ----
-
-async function scrapeMany(urls) {
-  const settings = await getSettings();
-  const results = {};
-  for (let i = 0; i < urls.length; i += settings.concurrent) {
-    const batch = urls.slice(i, i + settings.concurrent);
-    const batchResults = await Promise.all(
-      batch.map((url) => scrapeOneUrl(url, settings.perTabTimeoutMs))
-    );
-    batch.forEach((url, idx) => { results[url] = batchResults[idx]; });
-    if (i + settings.concurrent < urls.length) {
-      await sleep(settings.delayBetweenBatchesMs);
-    }
-  }
-  return { ok: true, results };
-}
-
-async function scrapeOneUrl(url, timeoutMs) {
-  return new Promise(async (resolve) => {
-    let tab;
-    try {
-      tab = await chrome.tabs.create({ url, active: false });
-    } catch (e) {
-      resolve({ error: 'tab_create_failed', comments: [] });
-      return;
-    }
-    // Register mission BEFORE content script can query
-    missions.set(tab.id, { mode: 'scrape' });
-    ensureKeepAlive();
-
-    const timer = setTimeout(() => {
-      pendingScrapes.delete(tab.id);
-      missions.delete(tab.id);
-      chrome.tabs.remove(tab.id).catch(() => {});
-      resolve({ error: 'timeout', comments: [] });
-    }, timeoutMs);
-
-    pendingScrapes.set(tab.id, {
-      resolve: (comments) => resolve({ comments }),
-      timer,
-    });
-  });
-}
 
 // ---- DISCOVER FLOW ----
 
@@ -273,7 +221,7 @@ async function discoverFromFeed(totalBudgetMs, startUrl) {
       const idx = cursor++;
       if (idx >= queue.length) return;
       const target = queue[idx];
-      const comments = await navigateAndScrape(tabId, target, 40000);
+      const comments = await navigateAndScrape(tabId, target, settings.perTabTimeoutMs);
       collected.push({ url: target, comments });
       console.log(`[BG] queue ${idx + 1}/${queue.length} tab=${tabId} → ${comments.length} comments`);
     }

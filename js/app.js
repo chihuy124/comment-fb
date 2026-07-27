@@ -54,26 +54,15 @@ document.addEventListener('DOMContentLoaded', () => {
         btnQuickSpintaxTest: document.getElementById('btn-quick-spintax-test'),
 
         // Tab 5: Scanner Elements
-        btnStartScan: document.getElementById('btn-start-scan'),
-        scanKeywordInput: document.getElementById('scan-keyword-input'),
         minIntentCount: document.getElementById('min-intent-count'),
         scannedResultsContainer: document.getElementById('scanned-results-container'),
         btnImportScannedAll: document.getElementById('btn-import-scanned-all'),
-        btnScrapeLiveComments: document.getElementById('btn-scrape-live-comments'),
         btnDiscoverFeed: document.getElementById('btn-discover-feed'),
         extStatusBanner: document.getElementById('ext-status-banner'),
         intentKeywordsContainer: document.getElementById('intent-keywords-container'),
         inputNewIntentKeyword: document.getElementById('input-new-intent-keyword'),
         btnAddIntentKeyword: document.getElementById('btn-add-intent-keyword'),
         chkHideCommented: document.getElementById('chk-hide-commented'),
-
-        // FB Cookie Settings (Tab 4)
-        inputFbCookie: document.getElementById('input-fb-cookie'),
-        btnSaveFbCookie: document.getElementById('btn-save-fb-cookie'),
-
-        // Cloud API Settings
-        customCloudApiUrl: document.getElementById('custom-cloud-api-url'),
-        btnSaveCloudApi: document.getElementById('btn-save-cloud-api'),
 
         // Settings & Export
         btnExportData: document.getElementById('btn-export-data'),
@@ -132,17 +121,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Gets active Scanner API Endpoint
-    function getScannerApiUrl() {
-        const customUrl = localStorage.getItem('fb_custom_cloud_api_url');
-        if (customUrl && customUrl.trim()) {
-            return customUrl.trim();
-        }
-        return window.location.hostname === 'localhost' 
-            ? 'http://localhost:5000/api/scan' 
-            : 'https://comment-fb.onrender.com/api/scan';
-    }
-
     // Page titles mapping
     const TAB_TITLES = {
         'dashboard-tab': { title: 'Bảng điều khiển Seeding 1-Click', subtitle: 'Nhấn nút "Copy & Mở bài", dán nội dung (Ctrl+V) và bấm Đăng comment an toàn.' },
@@ -156,51 +134,9 @@ document.addEventListener('DOMContentLoaded', () => {
     function init() {
         bindEvents();
         initPromoLink();
-        initFbCookieSetting();
-        initCloudApiSetting();
         renderIntentKeywords();
         renderAll();
         initTheme();
-    }
-
-    function initFbCookieSetting() {
-        const savedCookie = localStorage.getItem('fb_user_cookie') || '';
-        if (elements.inputFbCookie) {
-            elements.inputFbCookie.value = savedCookie;
-        }
-
-        if (elements.btnSaveFbCookie) {
-            elements.btnSaveFbCookie.addEventListener('click', () => {
-                const cookieStr = elements.inputFbCookie.value.trim();
-                if (cookieStr) {
-                    localStorage.setItem('fb_user_cookie', cookieStr);
-                    showToast('Đã lưu Cookie Facebook thành công! Mỗi lượt quét cào live sẽ gắn Cookie này.', 'success');
-                } else {
-                    localStorage.removeItem('fb_user_cookie');
-                    showToast('Đã xóa Cookie Facebook!', 'info');
-                }
-            });
-        }
-    }
-
-    function initCloudApiSetting() {
-        const savedUrl = localStorage.getItem('fb_custom_cloud_api_url') || 'https://comment-fb.onrender.com/api/scan';
-        if (elements.customCloudApiUrl) {
-            elements.customCloudApiUrl.value = savedUrl;
-        }
-
-        if (elements.btnSaveCloudApi) {
-            elements.btnSaveCloudApi.addEventListener('click', () => {
-                const url = elements.customCloudApiUrl.value.trim();
-                if (url) {
-                    localStorage.setItem('fb_custom_cloud_api_url', url);
-                    showToast('Đã lưu đường link Server Cloud API Scanner mới!', 'success');
-                } else {
-                    localStorage.removeItem('fb_custom_cloud_api_url');
-                    showToast('Đã khôi phục đường link Cloud API mặc định!', 'info');
-                }
-            });
-        }
     }
 
     // --- PROMO LINK INITIALIZATION & EVENT ---
@@ -487,20 +423,12 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!elements.extStatusBanner) return;
         if (extensionReady) {
             elements.extStatusBanner.innerHTML = `<span style="color:#22c55e;">✅ Extension đã kết nối (v${extensionVersion || '?'}). Có thể Discover Reels + cào Comment thật từ session FB của bạn.</span>`;
-            if (elements.btnScrapeLiveComments) {
-                elements.btnScrapeLiveComments.disabled = scannedItems.length === 0;
-                elements.btnScrapeLiveComments.title = 'Cào comment thật từ mỗi Reel qua session FB của bạn';
-            }
             if (elements.btnDiscoverFeed) {
                 elements.btnDiscoverFeed.disabled = false;
-                elements.btnDiscoverFeed.title = 'Mở tab ẩn feed FB Reels, scroll ~45s, thu thập URL Reel bạn thấy';
+                elements.btnDiscoverFeed.title = 'Mở tab ẩn feed FB, cào comment thật của từng Reel';
             }
         } else {
-            elements.extStatusBanner.innerHTML = `Extension chưa phát hiện. Xem <a href="extension/README.md" target="_blank" style="color:var(--accent-blue);">hướng dẫn cài</a> để cào comment thật + discover Reel từ session FB.`;
-            if (elements.btnScrapeLiveComments) {
-                elements.btnScrapeLiveComments.disabled = true;
-                elements.btnScrapeLiveComments.title = 'Cần cài Chrome Extension trước';
-            }
+            elements.extStatusBanner.innerHTML = `Extension chưa phát hiện. Xem <a href="extension/README.md" target="_blank" style="color:var(--accent-blue);">hướng dẫn cài</a> để cào Reels + comment thật từ session FB.`;
             if (elements.btnDiscoverFeed) {
                 elements.btnDiscoverFeed.disabled = true;
                 elements.btnDiscoverFeed.title = 'Cần cài Chrome Extension trước';
@@ -539,69 +467,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function scrapeIdFromRequest() {
         return `req_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
-    }
-
-    // Ask extension to scrape live comments for the current scanned URLs.
-    // Updates scannedItems in-place with real comments + real intentCount.
-    async function scrapeLiveCommentsViaExtension() {
-        if (!extensionReady) {
-            showToast('Chưa cài extension. Mở extension/README.md để làm theo.', 'warning');
-            return;
-        }
-        const urls = scannedItems.map(i => i.url);
-        if (urls.length === 0) return;
-
-        const requestId = scrapeIdFromRequest();
-        elements.btnScrapeLiveComments.disabled = true;
-        elements.btnScrapeLiveComments.innerHTML = `<span>🧩 Đang cào comment ${urls.length} Reel...</span>`;
-        showToast(`Extension bắt đầu cào ${urls.length} Reel. Có thể mất 1-3 phút tùy số lượng.`, 'info');
-
-        const done = new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => reject(new Error('extension_timeout')), 5 * 60 * 1000);
-            const listener = (e) => {
-                if (e.source !== window) return;
-                const msg = e.data;
-                if (!msg || msg.source !== EXT_TAG || msg.requestId !== requestId) return;
-                if (msg.type === 'SCRAPE_RESULT') {
-                    clearTimeout(timeout);
-                    window.removeEventListener('message', listener);
-                    resolve(msg.response);
-                } else if (msg.type === 'SCRAPE_ERROR') {
-                    clearTimeout(timeout);
-                    window.removeEventListener('message', listener);
-                    reject(new Error(msg.error));
-                }
-            };
-            window.addEventListener('message', listener);
-        });
-
-        window.postMessage({ source: EXT_TAG, type: 'SCRAPE_URLS', requestId, urls }, '*');
-
-        try {
-            const response = await done;
-            const results = response?.results || {};
-            let updatedCount = 0;
-            let matchedTotal = 0;
-            scannedItems.forEach(item => {
-                const r = results[item.url];
-                if (r && Array.isArray(r.comments) && r.comments.length) {
-                    const matched = matchIntent(r.comments, intentKeywords);
-                    item.intentComments = matched.length ? matched : r.comments.slice(0, 5);
-                    item.intentCount = matched.length;
-                    item.source = 'live_extension';
-                    updatedCount++;
-                    matchedTotal += matched.length;
-                }
-            });
-            showToast(`Đã cào xong: cập nhật ${updatedCount}/${urls.length} Reel với ${matchedTotal} comment intent thật.`, 'success');
-            renderScannedResults();
-        } catch (err) {
-            console.error(err);
-            showToast(`Lỗi khi cào comment qua extension: ${err.message}`, 'warning');
-        } finally {
-            elements.btnScrapeLiveComments.disabled = false;
-            elements.btnScrapeLiveComments.innerHTML = '<span>🧩 Cào Comment Thật (qua Extension)</span>';
-        }
     }
 
     // Ask extension to open FB feed in a hidden tab, scroll, and return
@@ -680,121 +545,12 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // --- TAB 5: REEL INTENT SCANNER LOGIC ---
-    async function handleStartScan() {
-        const rawKeywords = elements.scanKeywordInput.value.trim() || 'review phim hay, phim chiếu rạp';
-        const minCount = Math.max(1, parseInt(elements.minIntentCount.value) || 1);
-        const fbCookie = localStorage.getItem('fb_user_cookie') || '';
-        const apiUrl = getScannerApiUrl();
-
-        // Build exclude list: every URL already in Bảng Seeding (any status).
-        // Backend will skip these entirely — nothing is re-crawled once you've
-        // added it to your board.
-        const existingPosts = StorageManager.getPosts();
-        const excludeUrls = existingPosts.map(p => p.url);
-
-        showToast(`Đang kết nối Server (${apiUrl}) cào live Facebook theo từ khóa "${rawKeywords}" (loại trừ ${excludeUrls.length} bài đã có)...`, 'info');
-        elements.btnStartScan.disabled = true;
-        elements.btnStartScan.innerHTML = '<span>Đang cào trực tiếp Facebook Reels & phân tích comment...</span>';
-
-        try {
-            const response = await fetch(apiUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    keyword: rawKeywords,
-                    min_intent: minCount,
-                    intent_keywords: intentKeywords,
-                    fb_cookie: fbCookie,
-                    exclude_urls: excludeUrls
-                })
-            });
-
-            if (response.ok) {
-                const data = await response.json();
-                scannedItems = data.results || [];
-                const excluded = data.excludedCount || excludeUrls.length;
-                showToast(`Đã cào ${scannedItems.length} bài Reels mới (đã loại ${excluded} bài trùng với Bảng Seeding).`, 'success');
-            } else {
-                throw new Error('API response not ok');
-            }
-        } catch (err) {
-            console.warn('Backend API connection fallback active:', err);
-            
-            // Real Facebook Reels Network Pool Fallback
-            scannedItems = [
-                {
-                    url: 'https://www.facebook.com/reel/1478696500970204',
-                    tag: `Reels Phim: ${rawKeywords}`,
-                    intentCount: 8,
-                    intentComments: [
-                        'Mai Nguyễn: Phim hay xem tiếp',
-                        'Trang Minh: Xem trọn bộ',
-                        'Nguyễn Xoan: Xem chọn bộ',
-                        'Quan Ly Hue: Xem tập tiếp theo',
-                        'Riview Phim Hay: Tiếp đi ạ',
-                        'Bà Lan Đen: Xemêtiêp',
-                        'Nguyễn Gấm: xem phim chọn bộ',
-                        'Phuoc Bui: Phim hay cho xem tiếp cảm ơn bạn'
-                    ]
-                },
-                {
-                    url: 'https://www.facebook.com/reel/3109878279219138',
-                    tag: 'Reel Phim Mới Cắt Cực Hay',
-                    intentCount: 5,
-                    intentComments: [
-                        'Vũ Nam: Cho xin link full phim này với',
-                        'Trần Thảo: Xem tiếp phần 2 ở đâu vậy ad',
-                        'Lê Thanh: Tên phim là gì vậy shop?',
-                        'Ngọc Hà: Hóng tập tiếp theo quá',
-                        'Bảo Anh: Xin link full HD vietsub'
-                    ]
-                },
-                {
-                    url: 'https://www.facebook.com/reel/2304822646992426',
-                    tag: 'Reel Phim Chiếu Rạp Hot Trend',
-                    intentCount: 4,
-                    intentComments: [
-                        'Đô Đô: Phim hay xem tiếp đi ad',
-                        'Phạm Linh: Cho em xin link tập 2 với ạ',
-                        'Hoàng Long: Phim tên gì vậy shop?',
-                        'Minh Khuê: Hóng link full bộ này'
-                    ]
-                },
-                {
-                    url: 'https://www.facebook.com/reel/2923052638048599',
-                    tag: 'Short Review Phim Hay Chọn Lọc',
-                    intentCount: 4,
-                    intentComments: [
-                        'Đặng Khôi: Xin link full bộ vietsub',
-                        'Vũ Trang: Tập tiếp theo đâu rồi ad',
-                        'Mai Anh: Cho xin link phần tiếp',
-                        'Đặng Khoa: Hóng tập mới quá ad'
-                    ]
-                },
-                {
-                    url: 'https://www.facebook.com/watch/?v=3439107119599902',
-                    tag: 'Reels Review Phim Hay',
-                    intentCount: 2,
-                    intentComments: [
-                        'Hoa Mẫu Đơn: X tiếp',
-                        'Hiệu Phạm Thị: Xem tiếp'
-                    ]
-                }
-            ].filter(item => item.intentCount >= minCount)
-             .filter(item => !excludeUrls.includes(item.url));
-
-            showToast(`Server không phản hồi — dùng pool dự phòng, đã lọc ${excludeUrls.length} bài trùng.`, 'info');
-        } finally {
-            elements.btnStartScan.disabled = false;
-            elements.btnStartScan.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg><span>Tự Động Quét & Phân Tích Comment Reels</span>';
-            renderScannedResults();
-            updateExtensionBanner();
-        }
+    function getMinIntent() {
+        return Math.max(0, parseInt(elements.minIntentCount?.value) || 0);
     }
 
     function renderScannedResults() {
-        // Refresh Discover/Scrape button state — scrape needs scannedItems > 0
+        // Refresh Discover button state — depends on extension + scannedItems
         if (typeof updateExtensionBanner === 'function') updateExtensionBanner();
 
         elements.scannedResultsContainer.innerHTML = '';
@@ -802,20 +558,27 @@ document.addEventListener('DOMContentLoaded', () => {
         const existingPosts = StorageManager.getPosts();
         const existingUrls = new Set(existingPosts.map(p => p.url));
         const shouldHideCommented = elements.chkHideCommented ? elements.chkHideCommented.checked : true;
+        const minIntent = getMinIntent();
 
-        let displayItems = scannedItems;
+        // Filtering happens entirely client-side now (no backend involved).
+        let displayItems = scannedItems.filter(item => (item.intentCount || 0) >= minIntent);
+        const belowThreshold = scannedItems.length - displayItems.length;
 
         if (shouldHideCommented) {
-            displayItems = scannedItems.filter(item => !existingUrls.has(item.url));
+            displayItems = displayItems.filter(item => !existingUrls.has(item.url));
         }
 
         if (displayItems.length === 0) {
+            let msg;
+            if (scannedItems.length === 0) {
+                msg = 'Nhấn "🚀 Discover + Cào Comment" để extension đi qua feed Reels của bạn và cào comment thật.';
+            } else if (belowThreshold === scannedItems.length) {
+                msg = `Đã quét ${scannedItems.length} Reels nhưng không bài nào đạt mốc ${minIntent} người comment hỏi. Thử giảm số tối thiểu xuống.`;
+            } else {
+                msg = 'Tất cả các bài Reels đạt tiêu chí đều đã có trong Bảng Seeding của bạn (Đã ẩn trùng).';
+            }
             elements.scannedResultsContainer.innerHTML = `
-                <div class="empty-state" style="padding:2rem 1rem;">
-                    <p>${scannedItems.length > 0 && shouldHideCommented 
-                        ? 'Tất cả các bài Reels quét được đã có trong Bảng Seeding của bạn (Đã ẩn trùng).' 
-                        : 'Không tìm thấy bài Reels nào từ Facebook có đủ số người hỏi theo tiêu chí tối thiểu bạn chọn.'}</p>
-                </div>
+                <div class="empty-state" style="padding:2rem 1rem;"><p>${msg}</p></div>
             `;
             elements.btnImportScannedAll.disabled = true;
             return;
@@ -840,11 +603,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     </a>
                     <div style="display:flex; gap:0.4rem; align-items:center;">
                         ${isAlreadyAdded ? '<span class="post-status-badge status-completed" style="font-size:0.75rem;">✓ Đã có trong Bảng Seeding</span>' : ''}
-                        ${item.source === 'search_engine' ? '<span class="post-tag-badge" style="background:rgba(59,130,246,0.15); color:#3b82f6; font-size:0.7rem;">🔎 Google/Bing</span>' : ''}
-                        ${item.source === 'live' ? '<span class="post-tag-badge" style="background:rgba(34,197,94,0.15); color:#22c55e; font-size:0.7rem;">📡 Live FB</span>' : ''}
-                        ${item.source === 'fb_feed' ? '<span class="post-tag-badge" style="background:rgba(168,85,247,0.15); color:#a855f7; font-size:0.7rem;">🔍 FB Feed</span>' : ''}
                         ${item.source === 'fb_feed_scraped' ? '<span class="post-tag-badge" style="background:rgba(34,197,94,0.2); color:#22c55e; font-size:0.7rem;">🚀 Feed + Comment thật</span>' : ''}
-                        ${item.source === 'live_extension' ? '<span class="post-tag-badge" style="background:rgba(34,197,94,0.2); color:#22c55e; font-size:0.7rem;">🧩 Comment thật</span>' : ''}
                         <span class="post-tag-badge" style="background:rgba(239, 68, 68, 0.15); color:var(--accent-red); font-weight:700;">🔥 ${item.intentCount} người comment hỏi</span>
                     </div>
                 </div>
@@ -952,12 +711,12 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.filterStatus.addEventListener('change', renderDashboardCards);
 
         // Tab 5 Scanner Events
-        elements.btnStartScan.addEventListener('click', handleStartScan);
-        if (elements.btnScrapeLiveComments) {
-            elements.btnScrapeLiveComments.addEventListener('click', scrapeLiveCommentsViaExtension);
-        }
         if (elements.btnDiscoverFeed) {
             elements.btnDiscoverFeed.addEventListener('click', discoverReelsViaExtension);
+        }
+        // Min-intent threshold now filters the list live, client-side
+        if (elements.minIntentCount) {
+            elements.minIntentCount.addEventListener('input', renderScannedResults);
         }
         // Extension might inject before or after our listener — ping proactively
         setTimeout(() => {
@@ -967,7 +726,11 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.btnImportScannedAll.addEventListener('click', () => {
             const existingPosts = StorageManager.getPosts();
             const existingUrls = new Set(existingPosts.map(p => p.url));
-            const unhandledItems = scannedItems.filter(item => !existingUrls.has(item.url));
+            const minIntent = getMinIntent();
+            // Only import what's actually shown (respects the min-intent filter)
+            const unhandledItems = scannedItems.filter(item =>
+                (item.intentCount || 0) >= minIntent && !existingUrls.has(item.url)
+            );
 
             if (unhandledItems.length === 0) return;
             const urls = unhandledItems.map(i => i.url);

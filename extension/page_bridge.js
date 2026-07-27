@@ -22,24 +22,6 @@
       return;
     }
 
-    if (msg.type === 'SCRAPE_URLS') {
-      try {
-        const response = await chrome.runtime.sendMessage({
-          type: 'SCRAPE_URLS',
-          urls: msg.urls || [],
-        });
-        window.postMessage(
-          { source: TAG, type: 'SCRAPE_RESULT', requestId: msg.requestId, response },
-          '*'
-        );
-      } catch (err) {
-        window.postMessage(
-          { source: TAG, type: 'SCRAPE_ERROR', requestId: msg.requestId, error: String(err) },
-          '*'
-        );
-      }
-    }
-
     if (msg.type === 'DISCOVER_REELS') {
       try {
         const response = await chrome.runtime.sendMessage({
