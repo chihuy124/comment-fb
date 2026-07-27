@@ -162,11 +162,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 // How long the in-tab feed-walking phase runs before we switch to
 // background-driven URL navigation (which is far more reliable).
-const DISCOVER_PHASE_MS = 22000;
+const DISCOVER_PHASE_MS = 30000;
 
 async function discoverFromFeed(totalBudgetMs, startUrl) {
   const overallDeadline = Date.now() + totalBudgetMs;
-  const url = startUrl || 'https://www.facebook.com/reel/';
+  // Must be a FEED page, not /reel/ — the vertical reel viewer only ever holds
+  // one reel in its DOM, so there is nothing to harvest there. /watch/ renders
+  // a grid of video cards whose anchors give us many permalinks.
+  const url = startUrl || 'https://www.facebook.com/watch/';
   console.log('[BG] discoverFromFeed start, url=', url, 'budget=', totalBudgetMs);
 
   let tab;

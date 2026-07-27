@@ -62,51 +62,44 @@ function canonicalize(href) {
 // ---------- DISCOVER MODE ----------
 
 async function discoverMode(durationMs) {
-  // Combined discover + scrape: walk the vertical Reel feed, for each fresh
-  // reel we land on, pause its video, open the comment panel, extract
-  // comments right there. Return a list of {url, comments} pairs. This is
-  // guaranteed correct — comments are read while the reel is the focused
-  // one in the viewport, no pinning gymnastics needed.
-  console.log('[FB Seeding CS] discover phase start, duration =', durationMs);
-  const results = new Map(); // reelId -> {url, comments}
+  // Pure harvest phase: scroll the Watch feed and collect every reel/video
+  // permalink we can see. No scraping here — background then navigates each
+  // URL individually, which is both reliable and guarantees the comments it
+  // reads belong to that reel.
+  console.log('[FB Seeding CS] harvest phase start, duration =', durationMs);
   const queue = new Set();
   const endTime = Date.now() + durationMs;
-  let noAdvanceCount = 0;
+  let idleRounds = 0;
 
-  // Let the first reel load before we touch anything
   await sleep(3500);
   sweepReelUrls().forEach((u) => queue.add(u));
+  console.log('[FB Seeding CS] initial sweep:', queue.size);
 
-  // Scrape the reel we landed on, then best-effort walk a few more. If the
-  // feed refuses to advance we bail quickly — background will drive the rest
-  // of the queue by navigating this tab URL-by-URL, which always works.
   while (Date.now() < endTime) {
-    const before = extractReelId(location.href);
-    if (before && !results.has(before)) {
-      console.log('[FB Seeding CS] scraping reel', before, '#', results.size + 1);
-      const comments = await quickScrapeCurrentReel();
-      results.set(before, { url: canonicalize(location.href), comments });
-      noAdvanceCount = 0;
-    }
+    const before = queue.size;
 
+    // Scroll the feed to lazy-load more cards, plus an arrow-down nudge in
+    // case we're on the vertical /reel/ layout instead.
+    window.scrollBy(0, window.innerHeight * 0.9);
     await advanceToNextReel();
-    await sleep(2000);
+    await sleep(1600);
     sweepReelUrls().forEach((u) => queue.add(u));
 
-    if (extractReelId(location.href) === before) {
-      noAdvanceCount++;
-      if (noAdvanceCount >= 2) {
-        console.log('[FB Seeding CS] feed will not advance — handing queue to background');
+    if (queue.size === before) {
+      idleRounds++;
+      if (idleRounds >= 6) {
+        console.log('[FB Seeding CS] no new URLs for 6 rounds — stopping harvest');
         break;
       }
+    } else {
+      idleRounds = 0;
+      chrome.runtime.sendMessage({ type: 'DISCOVER_PROGRESS', count: queue.size });
     }
   }
 
-  const reels = Array.from(results.values());
-  const scrapedUrls = new Set(reels.map((r) => r.url));
-  const pending = Array.from(queue).filter((u) => !scrapedUrls.has(u));
-  console.log('[FB Seeding CS] discover done: scraped', reels.length, '| queued', pending.length);
-  chrome.runtime.sendMessage({ type: 'DISCOVER_RESULT', reels, queue: pending });
+  const pending = Array.from(queue);
+  console.log('[FB Seeding CS] harvest done:', pending.length, 'URLs');
+  chrome.runtime.sendMessage({ type: 'DISCOVER_RESULT', reels: [], queue: pending });
 }
 
 function sweepReelUrls() {
@@ -131,35 +124,6 @@ function sweepReelUrls() {
   });
 
   return found;
-}
-
-async function quickScrapeCurrentReel() {
-  // Pause videos so FB can't auto-advance while we open + read comments
-  document.querySelectorAll('video').forEach((v) => {
-    try { v.pause(); v.muted = true; } catch (_) {}
-  });
-
-  await dismissLoginNags();
-  const opened = await openCommentPanel();
-  if (!opened) return [];
-  await switchToAllComments();
-
-  const panel = findCommentScrollContainer();
-  // 3 scroll passes is enough to load ~15-30 comments — plenty for intent detection
-  for (let i = 0; i < 3; i++) {
-    if (panel) panel.scrollTop = panel.scrollHeight;
-    await sleep(800);
-    await clickMoreCommentsButtons();
-  }
-
-  const collected = collectCommentText();
-  const seen = new Set();
-  const uniq = [];
-  for (const c of collected) {
-    if (!seen.has(c)) { seen.add(c); uniq.push(c); }
-  }
-  console.log('[FB Seeding CS]   got', uniq.length, 'comments on reel', extractReelId(location.href));
-  return uniq.slice(0, 60);
 }
 
 async function advanceToNextReel() {
