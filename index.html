@@ -190,6 +190,32 @@
                     </div>
                 </div>
 
+                <!-- Bulk sequential auto-comment -->
+                <div class="card card-panel" style="margin-bottom:1.25rem;">
+                    <div class="card-body" style="display:flex; flex-wrap:wrap; align-items:flex-end; gap:1rem;">
+                        <div class="form-group" style="margin:0;">
+                            <label for="bulk-delay-min" style="font-size:0.82rem;">Chờ tối thiểu (giây)</label>
+                            <input type="number" id="bulk-delay-min" class="form-control" value="30" min="5" max="600" style="width:120px;">
+                        </div>
+                        <div class="form-group" style="margin:0;">
+                            <label for="bulk-delay-max" style="font-size:0.82rem;">Chờ tối đa (giây)</label>
+                            <input type="number" id="bulk-delay-max" class="form-control" value="90" min="5" max="900" style="width:120px;">
+                        </div>
+
+                        <button class="btn btn-primary" id="btn-comment-all" disabled title="Cần cài Chrome Extension trước">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"></path></svg>
+                            <span>Comment Tất Cả</span>
+                        </button>
+                        <button class="btn btn-secondary" id="btn-stop-comment-all" disabled>
+                            <span>■ Dừng</span>
+                        </button>
+
+                        <div id="bulk-status" style="flex:1; min-width:240px; font-size:0.86rem; color:var(--text-secondary); line-height:1.5;">
+                            Đăng tuần tự từng bài, mỗi bài cách nhau một khoảng thời gian ngẫu nhiên trong phạm vi trên.
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Action Cards Grid -->
                 <div class="dashboard-cards-grid" id="cards-container">
                     <!-- Cards will be populated dynamically -->

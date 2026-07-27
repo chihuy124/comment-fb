@@ -24,6 +24,11 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Dashboard
         cardsContainer: document.getElementById('cards-container'),
+        bulkDelayMin: document.getElementById('bulk-delay-min'),
+        bulkDelayMax: document.getElementById('bulk-delay-max'),
+        btnCommentAll: document.getElementById('btn-comment-all'),
+        btnStopCommentAll: document.getElementById('btn-stop-comment-all'),
+        bulkStatus: document.getElementById('bulk-status'),
         searchDashboard: document.getElementById('search-dashboard'),
         filterCategory: document.getElementById('filter-category'),
         filterStatus: document.getElementById('filter-status'),
@@ -93,6 +98,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let extensionVersion = null;
     let huntedItems = [];
     let huntRunning = false;
+    let bulkRunning = false;
+    let bulkAbort = false;
 
     function getStoredIntentKeywords() {
         const stored = localStorage.getItem('fb_intent_keywords');
@@ -474,6 +481,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 elements.btnDiscoverFeed.title = 'Mở tab ẩn feed FB, cào comment thật của từng Reel';
             }
             if (elements.btnStartHunt && !huntRunning) elements.btnStartHunt.disabled = false;
+            if (elements.btnCommentAll && !bulkRunning) {
+                elements.btnCommentAll.disabled = false;
+                elements.btnCommentAll.title = 'Đăng comment tuần tự cho tất cả bài đang chờ';
+            }
             if (elements.huntExtNote) {
                 elements.huntExtNote.innerHTML = `<span style="color:#22c55e;">✅ Extension đã kết nối (v${extensionVersion || '?'}).</span>`;
             }
@@ -484,6 +495,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 elements.btnDiscoverFeed.title = 'Cần cài Chrome Extension trước';
             }
             if (elements.btnStartHunt) elements.btnStartHunt.disabled = true;
+            if (elements.btnCommentAll) {
+                elements.btnCommentAll.disabled = true;
+                elements.btnCommentAll.title = 'Cần cài Chrome Extension trước';
+            }
             if (elements.huntExtNote) {
                 elements.huntExtNote.textContent = 'Cần cài Chrome Extension và đăng nhập Facebook trên trình duyệt này.';
             }
@@ -539,25 +554,9 @@ document.addEventListener('DOMContentLoaded', () => {
         empty_text: 'Comment đang trống — hãy tạo nội dung trước.',
     };
 
-    async function autoCommentOnPost(postId, btnEl) {
-        if (!extensionReady) {
-            showToast('Cần cài Chrome Extension để tự động comment. Xem tab Cài đặt.', 'warning');
-            return;
-        }
-        const post = StorageManager.getPosts().find(p => p.id === postId);
-        if (!post) return;
-        if (!post.currentComment || !post.currentComment.trim()) {
-            showToast('Bài này chưa có nội dung comment. Bấm nút đổi biến thể để sinh nội dung.', 'warning');
-            return;
-        }
-
-        const originalHtml = btnEl ? btnEl.innerHTML : null;
-        if (btnEl) {
-            btnEl.disabled = true;
-            btnEl.innerHTML = '<span>Đang đăng...</span>';
-        }
-        showToast('Đang mở bài và đăng comment...', 'info');
-
+    // Sends one comment request to the extension and resolves with its result.
+    // Shared by the per-card button and the sequential "Comment Tất Cả" run.
+    function requestCommentPost(post) {
         const requestId = scrapeIdFromRequest();
         const done = new Promise((resolve, reject) => {
             const timeout = setTimeout(() => reject(new Error('Quá thời gian chờ extension.')), 150000);
@@ -583,6 +582,34 @@ document.addEventListener('DOMContentLoaded', () => {
             url: post.url, text: post.currentComment,
         }, '*');
 
+        return done;
+    }
+
+    async function autoCommentOnPost(postId, btnEl) {
+        if (!extensionReady) {
+            showToast('Cần cài Chrome Extension để tự động comment. Xem tab Cài đặt.', 'warning');
+            return;
+        }
+        if (bulkRunning) {
+            showToast('Đang chạy "Comment Tất Cả" — hãy dừng trước khi đăng lẻ.', 'warning');
+            return;
+        }
+        const post = StorageManager.getPosts().find(p => p.id === postId);
+        if (!post) return;
+        if (!post.currentComment || !post.currentComment.trim()) {
+            showToast('Bài này chưa có nội dung comment. Bấm nút đổi biến thể để sinh nội dung.', 'warning');
+            return;
+        }
+
+        const originalHtml = btnEl ? btnEl.innerHTML : null;
+        if (btnEl) {
+            btnEl.disabled = true;
+            btnEl.innerHTML = '<span>Đang đăng...</span>';
+        }
+        showToast('Đang mở bài và đăng comment...', 'info');
+
+        const done = requestCommentPost(post);
+
         try {
             const res = await done;
             if (res?.ok) {
@@ -606,6 +633,147 @@ document.addEventListener('DOMContentLoaded', () => {
                 btnEl.innerHTML = originalHtml;
             }
         }
+    }
+
+    // --- BULK SEQUENTIAL AUTO COMMENT ---
+    // Strictly one comment at a time with a random gap in between. Never two
+    // tabs at once: simultaneous timestamps across different posts are the
+    // clearest bot signal there is.
+
+    function setBulkRunning(running) {
+        bulkRunning = running;
+        if (elements.btnCommentAll) {
+            elements.btnCommentAll.disabled = running || !extensionReady;
+            elements.btnCommentAll.innerHTML = running
+                ? '<span>Đang chạy...</span>'
+                : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"></path></svg><span>Comment Tất Cả</span>';
+        }
+        if (elements.btnStopCommentAll) elements.btnStopCommentAll.disabled = !running;
+        if (elements.bulkDelayMin) elements.bulkDelayMin.disabled = running;
+        if (elements.bulkDelayMax) elements.bulkDelayMax.disabled = running;
+    }
+
+    function setBulkStatus(html) {
+        if (elements.bulkStatus) elements.bulkStatus.innerHTML = html;
+    }
+
+    function formatMMSS(ms) {
+        const total = Math.max(0, Math.ceil(ms / 1000));
+        const m = String(Math.floor(total / 60)).padStart(2, '0');
+        const s = String(total % 60).padStart(2, '0');
+        return `${m}:${s}`;
+    }
+
+    // Abortable countdown that repaints the remaining time every second.
+    function waitWithCountdown(ms, label) {
+        return new Promise((resolve) => {
+            const endAt = Date.now() + ms;
+            const tick = () => {
+                if (bulkAbort) {
+                    clearInterval(timer);
+                    resolve('aborted');
+                    return;
+                }
+                const left = endAt - Date.now();
+                if (left <= 0) {
+                    clearInterval(timer);
+                    resolve('done');
+                    return;
+                }
+                setBulkStatus(`${label} · <strong style="color:var(--accent-blue); font-size:1.05rem;">${formatMMSS(left)}</strong> nữa`);
+            };
+            const timer = setInterval(tick, 250);
+            tick();
+        });
+    }
+
+    async function commentAllSequentially() {
+        if (!extensionReady) {
+            showToast('Cần cài Chrome Extension trước. Xem tab Cài đặt.', 'warning');
+            return;
+        }
+        if (bulkRunning) return;
+
+        let minS = Math.max(5, parseInt(elements.bulkDelayMin?.value) || 30);
+        let maxS = Math.max(5, parseInt(elements.bulkDelayMax?.value) || 90);
+        if (minS > maxS) { const t = minS; minS = maxS; maxS = t; }
+
+        const queue = StorageManager.getPosts()
+            .filter(p => p.status === 'PENDING' && p.currentComment && p.currentComment.trim());
+
+        if (queue.length === 0) {
+            showToast('Không có bài nào đang chờ comment.', 'info');
+            return;
+        }
+
+        bulkAbort = false;
+        setBulkRunning(true);
+        let posted = 0, failed = 0, consecutiveFailures = 0;
+
+        showToast(`Bắt đầu đăng tuần tự ${queue.length} bài, cách nhau ${minS}-${maxS}s.`, 'info');
+
+        for (let i = 0; i < queue.length; i++) {
+            if (bulkAbort) break;
+            const post = queue[i];
+            const pos = `Bài ${i + 1}/${queue.length}`;
+
+            setBulkStatus(`${pos} · <span style="color:var(--accent-blue);">đang mở bài và đăng comment...</span> · ✅ ${posted} · ✗ ${failed}`);
+
+            let res;
+            try {
+                res = await requestCommentPost(post);
+            } catch (err) {
+                res = { ok: false, error: 'exception', hint: err.message };
+            }
+
+            if (res?.ok) {
+                StorageManager.updatePostStatus(post.id, 'COMPLETED');
+                posted++;
+                consecutiveFailures = 0;
+            } else {
+                failed++;
+                consecutiveFailures++;
+                const why = COMMENT_ERROR_TEXT[res?.error] || res?.hint || res?.error || 'không rõ';
+                showToast(`${pos} chưa đăng được: ${why}`, 'warning');
+            }
+            renderAll();
+
+            // Stop early rather than hammering a wall — repeated failures usually
+            // mean Facebook is blocking, and pushing on makes that worse.
+            if (consecutiveFailures >= 3) {
+                setBulkStatus(`<span style="color:var(--accent-red);">Đã dừng: 3 bài liên tiếp thất bại — có thể Facebook đang chặn. Đã đăng ${posted}, lỗi ${failed}.</span>`);
+                showToast('Dừng tự động vì 3 bài liên tiếp thất bại. Kiểm tra lại tài khoản trước khi chạy tiếp.', 'warning');
+                setBulkRunning(false);
+                return;
+            }
+
+            if (bulkAbort) break;
+
+            // Random gap before the next one (no gap after the last)
+            if (i < queue.length - 1) {
+                const waitMs = (minS + Math.random() * (maxS - minS)) * 1000;
+                const outcome = await waitWithCountdown(
+                    waitMs,
+                    `${pos} xong · ✅ ${posted} · ✗ ${failed} · chờ bài ${i + 2}/${queue.length} sau`
+                );
+                if (outcome === 'aborted') break;
+            }
+        }
+
+        const stopped = bulkAbort;
+        setBulkStatus(
+            `<strong>${stopped ? 'Đã dừng' : 'Hoàn tất'}:</strong> đăng thành công ${posted}, thất bại ${failed} / ${queue.length} bài.`
+        );
+        showToast(`${stopped ? 'Đã dừng' : 'Xong'}: đăng ${posted}, lỗi ${failed}.`, stopped ? 'info' : 'success');
+        setBulkRunning(false);
+        renderAll();
+    }
+
+    function stopCommentAll() {
+        if (!bulkRunning) return;
+        bulkAbort = true;
+        setBulkStatus('Đang dừng... chờ bài hiện tại kết thúc.');
+        showToast('Đã yêu cầu dừng. Các bài đã đăng vẫn được giữ.', 'info');
     }
 
     // --- REEL HUNTER ---
@@ -1037,6 +1205,10 @@ document.addEventListener('DOMContentLoaded', () => {
             renderAll();
             renderScannedResults();
         });
+
+        // Bulk sequential auto-comment
+        if (elements.btnCommentAll) elements.btnCommentAll.addEventListener('click', commentAllSequentially);
+        if (elements.btnStopCommentAll) elements.btnStopCommentAll.addEventListener('click', stopCommentAll);
 
         // Search & Filters
         elements.searchDashboard.addEventListener('input', renderDashboardCards);
