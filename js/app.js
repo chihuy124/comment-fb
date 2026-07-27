@@ -612,14 +612,16 @@ document.addEventListener('DOMContentLoaded', () => {
             showToast('Chưa cài extension. Xem extension/README.md.', 'warning');
             return;
         }
-        const durationMs = 120000; // 2 min — enough for ~15-25 reels with per-reel scrape
+        // Total budget for the extension: ~22s walking the feed to harvest a
+        // URL queue, then background navigates tabs through that queue.
+        const durationMs = 210000; // 3.5 min → typically 20-35 reels
         const requestId = scrapeIdFromRequest();
         elements.btnDiscoverFeed.disabled = true;
         elements.btnDiscoverFeed.innerHTML = `<span>🚀 Đang cào feed FB (~${durationMs/1000}s)...</span>`;
         showToast(`Extension mở tab ẩn FB, mỗi Reel cào comment thật ngay tại chỗ rồi mới sang Reel tiếp. Chạy ~${durationMs/1000}s. Đảm bảo đã login FB.`, 'info');
 
         const done = new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => reject(new Error('discover_timeout')), durationMs + 30000);
+            const timeout = setTimeout(() => reject(new Error('discover_timeout')), durationMs + 90000);
             const listener = (e) => {
                 if (e.source !== window) return;
                 const msg = e.data;

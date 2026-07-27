@@ -113,9 +113,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (p) {
       clearTimeout(p.timer);
       pendingScrapes.delete(sender.tab.id);
-      missions.delete(sender.tab.id);
+      if (!p.keepTab) {
+        missions.delete(sender.tab.id);
+        chrome.tabs.remove(sender.tab.id).catch(() => {});
+      }
       p.resolve(msg.comments || []);
-      chrome.tabs.remove(sender.tab.id).catch(() => {});
     }
     return false;
   }
@@ -126,16 +128,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
-  // Content script reports discover done (new: reels payload includes comments)
+  // Content script reports discover done: reels scraped in-tab + queued URLs
   if (msg?.type === 'DISCOVER_RESULT' && sender.tab?.id != null) {
     const p = pendingDiscovers.get(sender.tab.id);
     if (p) {
       clearTimeout(p.timer);
       pendingDiscovers.delete(sender.tab.id);
-      missions.delete(sender.tab.id);
-      // Support both old shape (urls: string[]) and new shape (reels: [{url, comments}])
-      p.resolve(msg.reels || msg.urls || []);
-      chrome.tabs.remove(sender.tab.id).catch(() => {});
+      if (!p.keepTab) {
+        missions.delete(sender.tab.id);
+        chrome.tabs.remove(sender.tab.id).catch(() => {});
+      }
+      p.resolve({
+        reels: msg.reels || [],
+        queue: msg.queue || msg.urls || [],
+      });
     }
     return false;
   }
@@ -206,34 +212,101 @@ async function scrapeOneUrl(url, timeoutMs) {
 
 // ---- DISCOVER FLOW ----
 
-async function discoverFromFeed(durationMs, startUrl) {
-  const url = startUrl || 'https://www.facebook.com/watch/';
-  console.log('[BG] discoverFromFeed start, url=', url, 'duration=', durationMs);
+// How long the in-tab feed-walking phase runs before we switch to
+// background-driven URL navigation (which is far more reliable).
+const DISCOVER_PHASE_MS = 22000;
+
+async function discoverFromFeed(totalBudgetMs, startUrl) {
+  const overallDeadline = Date.now() + totalBudgetMs;
+  const url = startUrl || 'https://www.facebook.com/reel/';
+  console.log('[BG] discoverFromFeed start, url=', url, 'budget=', totalBudgetMs);
+
   let tab;
   try {
     tab = await chrome.tabs.create({ url, active: false });
-    console.log('[BG] tab created id=', tab.id);
+    console.log('[BG] discover tab id=', tab.id);
   } catch (e) {
     console.error('[BG] tab create failed:', e);
-    return { ok: false, error: 'tab_create_failed', urls: [] };
+    return { ok: false, error: 'tab_create_failed', reels: [] };
   }
-  missions.set(tab.id, { mode: 'discover', durationMs });
+  missions.set(tab.id, { mode: 'discover', durationMs: DISCOVER_PHASE_MS });
   ensureKeepAlive();
 
-  return new Promise((resolve) => {
-    // durationMs + generous buffer for tab load + content script GET_MISSION round-trip
+  // --- Phase A: content script walks the feed, scrapes what it can, and
+  // returns the URL queue it harvested from the DOM. ---
+  const first = await new Promise((resolve) => {
     const timer = setTimeout(() => {
       pendingDiscovers.delete(tab.id);
-      missions.delete(tab.id);
-      chrome.tabs.remove(tab.id).catch(() => {});
-      console.warn('[BG] discover timeout tab=', tab.id);
-      resolve({ ok: false, error: 'timeout', urls: [] });
-    }, durationMs + 25000);
-
+      console.warn('[BG] discover phase timeout tab=', tab.id);
+      resolve({ reels: [], queue: [] });
+    }, DISCOVER_PHASE_MS + 30000);
     pendingDiscovers.set(tab.id, {
-      // 'data' is either urls: string[] (old) or reels: [{url, comments}] (new)
-      resolve: (data) => resolve({ ok: true, reels: data }),
+      resolve: (data) => { clearTimeout(timer); resolve(data); },
       timer,
+      keepTab: true, // reuse this tab for phase B
+    });
+  });
+
+  const collected = (first.reels || []).filter((r) => r && r.url);
+  const seen = new Set(collected.map((r) => r.url));
+  const queue = (first.queue || []).filter((u) => u && !seen.has(u));
+  console.log('[BG] phase A done: scraped', collected.length, '| queue', queue.length);
+
+  // --- Phase B: drive the queue by navigating tabs URL-by-URL. Each page
+  // load shows exactly one reel, so scraped comments can never belong to a
+  // neighbouring reel. Uses a few tabs as parallel lanes. ---
+  const settings = await getSettings();
+  const lanes = Math.max(1, Math.min(4, settings.concurrent || 3));
+  const laneTabs = [tab.id];
+  for (let i = 1; i < lanes; i++) {
+    try {
+      const t = await chrome.tabs.create({ url: 'about:blank', active: false });
+      laneTabs.push(t.id);
+    } catch (e) { /* fewer lanes is fine */ }
+  }
+
+  let cursor = 0;
+  const worker = async (tabId) => {
+    while (true) {
+      // Leave headroom so we can still return results before the app times out
+      if (Date.now() > overallDeadline - 12000) return;
+      const idx = cursor++;
+      if (idx >= queue.length) return;
+      const target = queue[idx];
+      const comments = await navigateAndScrape(tabId, target, 40000);
+      collected.push({ url: target, comments });
+      console.log(`[BG] queue ${idx + 1}/${queue.length} tab=${tabId} → ${comments.length} comments`);
+    }
+  };
+  await Promise.all(laneTabs.map(worker));
+
+  for (const id of laneTabs) {
+    missions.delete(id);
+    chrome.tabs.remove(id).catch(() => {});
+  }
+  console.log('[BG] discover+scrape complete, reels =', collected.length);
+  return { ok: true, reels: collected };
+}
+
+// Navigate an existing tab to a reel URL and wait for its content script to
+// report the comments it scraped. Tab is kept open for reuse.
+function navigateAndScrape(tabId, url, timeoutMs) {
+  return new Promise(async (resolve) => {
+    missions.set(tabId, { mode: 'scrape' });
+    try {
+      await chrome.tabs.update(tabId, { url });
+    } catch (e) {
+      resolve([]);
+      return;
+    }
+    const timer = setTimeout(() => {
+      pendingScrapes.delete(tabId);
+      resolve([]);
+    }, timeoutMs);
+    pendingScrapes.set(tabId, {
+      resolve: (comments) => { clearTimeout(timer); resolve(comments || []); },
+      timer,
+      keepTab: true,
     });
   });
 }

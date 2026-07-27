@@ -67,54 +67,70 @@ async function discoverMode(durationMs) {
   // comments right there. Return a list of {url, comments} pairs. This is
   // guaranteed correct — comments are read while the reel is the focused
   // one in the viewport, no pinning gymnastics needed.
-  console.log('[FB Seeding CS] discover+scrape mode start, duration =', durationMs);
+  console.log('[FB Seeding CS] discover phase start, duration =', durationMs);
   const results = new Map(); // reelId -> {url, comments}
+  const queue = new Set();
   const endTime = Date.now() + durationMs;
-  let lastReport = 0;
   let noAdvanceCount = 0;
-
-  try {
-    chrome.runtime.sendMessage({ type: 'DISCOVER_PROGRESS', count: 0, phase: 'start' });
-  } catch (_) {}
 
   // Let the first reel load before we touch anything
   await sleep(3500);
+  sweepReelUrls().forEach((u) => queue.add(u));
 
+  // Scrape the reel we landed on, then best-effort walk a few more. If the
+  // feed refuses to advance we bail quickly — background will drive the rest
+  // of the queue by navigating this tab URL-by-URL, which always works.
   while (Date.now() < endTime) {
     const before = extractReelId(location.href);
     if (before && !results.has(before)) {
-      const canon = canonicalize(location.href);
       console.log('[FB Seeding CS] scraping reel', before, '#', results.size + 1);
       const comments = await quickScrapeCurrentReel();
-      results.set(before, { url: canon, comments });
+      results.set(before, { url: canonicalize(location.href), comments });
       noAdvanceCount = 0;
-
-      if (Date.now() - lastReport > 3000) {
-        lastReport = Date.now();
-        try {
-          chrome.runtime.sendMessage({ type: 'DISCOVER_PROGRESS', count: results.size });
-        } catch (_) {}
-      }
     }
 
-    // Advance to next reel
     await advanceToNextReel();
-    await sleep(2500);
+    await sleep(2000);
+    sweepReelUrls().forEach((u) => queue.add(u));
 
-    // If URL didn't change 3 times in a row → probably stuck, break
-    const after = extractReelId(location.href);
-    if (after === before) {
+    if (extractReelId(location.href) === before) {
       noAdvanceCount++;
-      if (noAdvanceCount >= 3) {
-        console.warn('[FB Seeding CS] cannot advance, stopping');
+      if (noAdvanceCount >= 2) {
+        console.log('[FB Seeding CS] feed will not advance — handing queue to background');
         break;
       }
     }
   }
 
-  const payload = Array.from(results.values());
-  console.log('[FB Seeding CS] discover+scrape done, reels =', payload.length);
-  chrome.runtime.sendMessage({ type: 'DISCOVER_RESULT', reels: payload });
+  const reels = Array.from(results.values());
+  const scrapedUrls = new Set(reels.map((r) => r.url));
+  const pending = Array.from(queue).filter((u) => !scrapedUrls.has(u));
+  console.log('[FB Seeding CS] discover done: scraped', reels.length, '| queued', pending.length);
+  chrome.runtime.sendMessage({ type: 'DISCOVER_RESULT', reels, queue: pending });
+}
+
+function sweepReelUrls() {
+  // Harvest every reel/watch permalink currently present in the DOM:
+  // anchors, the live location, plus a regex pass over raw HTML to catch
+  // lazily-rendered React props.
+  const found = new Set();
+  const cur = canonicalize(location.href);
+  if (cur) found.add(cur);
+
+  document.querySelectorAll('a[href]').forEach((a) => {
+    const c = canonicalize(a.getAttribute('href'));
+    if (c) found.add(c);
+  });
+
+  const html = document.documentElement.outerHTML.slice(0, 800000);
+  (html.match(/\/reels?\/(\d{8,})/g) || []).forEach((m) => {
+    found.add('https://www.facebook.com/reel/' + m.replace(/^\/reels?\//, ''));
+  });
+  (html.match(/\/watch\/?\?v=(\d{8,})/g) || []).forEach((m) => {
+    found.add('https://www.facebook.com/watch/?v=' + m.match(/(\d{8,})/)[1]);
+  });
+
+  return found;
 }
 
 async function quickScrapeCurrentReel() {
