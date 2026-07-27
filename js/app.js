@@ -64,7 +64,6 @@ document.addEventListener('DOMContentLoaded', () => {
         huntTargetCount: document.getElementById('hunt-target-count'),
         huntMinIntent: document.getElementById('hunt-min-intent'),
         huntMaxChecks: document.getElementById('hunt-max-checks'),
-        huntBudgetMin: document.getElementById('hunt-budget-min'),
         huntSkipExisting: document.getElementById('hunt-skip-existing'),
         btnStartHunt: document.getElementById('btn-start-hunt'),
         btnStopHunt: document.getElementById('btn-stop-hunt'),
@@ -587,7 +586,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const targetCount = Math.max(1, parseInt(elements.huntTargetCount?.value) || 10);
         const minIntent = Math.max(1, parseInt(elements.huntMinIntent?.value) || 2);
         const maxChecks = Math.max(5, parseInt(elements.huntMaxChecks?.value) || 120);
-        const budgetMs = Math.max(1, parseInt(elements.huntBudgetMin?.value) || 15) * 60 * 1000;
         const skipExisting = elements.huntSkipExisting ? elements.huntSkipExisting.checked : true;
         const searchKeywords = (elements.scanKeywordInput?.value || '')
             .split(',').map(k => k.trim()).filter(Boolean);
@@ -596,12 +594,15 @@ document.addEventListener('DOMContentLoaded', () => {
         huntedItems = [];
         renderHuntResults();
         setHuntRunning(true);
-        renderHuntProgress(`Đang khởi động... Mục tiêu ${targetCount} Reels đạt chuẩn (≥${minIntent} comment hỏi).`);
+        renderHuntProgress(`Đang khởi động... Mục tiêu ${targetCount} Reels đạt chuẩn (≥${minIntent} comment hỏi), kiểm tối đa ${maxChecks} Reels.`);
 
         const requestId = scrapeIdFromRequest();
+        // There is no time limit any more — maxChecks bounds the run. This is
+        // only a watchdog for a silently dead extension, so it has to sit well
+        // past the worst case (every reel timing out at ~45s, plus replenishes).
+        const watchdogMs = maxChecks * 60000 + 10 * 60000;
         const done = new Promise((resolve, reject) => {
-            // Hard ceiling a bit past the extension's own budget
-            const timeout = setTimeout(() => reject(new Error('hunt_timeout')), budgetMs + 120000);
+            const timeout = setTimeout(() => reject(new Error('hunt_timeout')), watchdogMs);
             const listener = (e) => {
                 if (e.source !== window) return;
                 const msg = e.data;
@@ -639,7 +640,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         window.postMessage({
             source: EXT_TAG, type: 'HUNT_REELS', requestId,
-            opts: { targetCount, minIntent, intentKeywords, searchKeywords, maxChecks, budgetMs, excludeUrls },
+            opts: { targetCount, minIntent, intentKeywords, searchKeywords, maxChecks, excludeUrls },
         }, '*');
 
         try {
@@ -647,8 +648,7 @@ document.addEventListener('DOMContentLoaded', () => {
             huntedItems = (response?.reels || []).filter(r => r && r.url);
             const reasons = {
                 target_reached: 'đã gom đủ mục tiêu',
-                max_checks: 'đã kiểm hết giới hạn số Reels',
-                timeout: 'hết thời gian',
+                max_checks: `đã kiểm hết giới hạn ${maxChecks} Reels`,
                 stopped: 'bạn đã bấm dừng',
                 sources_exhausted: 'Facebook không trả thêm Reels mới',
             };

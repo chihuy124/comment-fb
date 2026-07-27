@@ -196,12 +196,10 @@ async function huntReels(opts, appTabId) {
     intentKeywords = [],
     searchKeywords = [],
     maxChecks = 120,
-    budgetMs = 15 * 60 * 1000,
     excludeUrls = [],
   } = opts || {};
 
   huntAbort = false;
-  const deadline = Date.now() + budgetMs;
   const visited = new Set((excludeUrls || []).map((u) => canonicalReelUrl(u) || u));
   const qualified = [];
   const frontier = [];
@@ -239,31 +237,36 @@ async function huntReels(opts, appTabId) {
   for (const kw of searchKeywords) {
     replenishSources.push(`https://www.facebook.com/search/videos/?q=${encodeURIComponent(kw)}`);
   }
-  let replenishIdx = 0;
+  // Sources are cycled, not consumed once: revisiting /reel/ or /watch/ makes
+  // Facebook serve different videos each time, so the pool keeps refilling and
+  // maxChecks stays the real stopping condition. Give up only after several
+  // consecutive rounds that yield nothing new.
+  let replenishRound = 0;
+  let dryRounds = 0;
+  const MAX_DRY_ROUNDS = 3;
 
   try {
-    while (
-      qualified.length < targetCount &&
-      checked < maxChecks &&
-      Date.now() < deadline &&
-      !huntAbort
-    ) {
+    while (qualified.length < targetCount && checked < maxChecks && !huntAbort) {
       // Out of reels to try → harvest a fresh batch from the next source
       if (frontier.length === 0) {
-        if (replenishIdx >= replenishSources.length) {
-          console.log('[BG][hunt] all replenish sources exhausted');
+        if (dryRounds >= MAX_DRY_ROUNDS) {
+          console.log(`[BG][hunt] ${MAX_DRY_ROUNDS} rounds with nothing new — stopping`);
           break;
         }
-        const src = replenishSources[replenishIdx++];
+        const src = replenishSources[replenishRound % replenishSources.length];
+        replenishRound++;
         // NB: field must NOT be called `source` — page_bridge wraps progress in
         // an envelope keyed `source: TAG` and spreads the message over it, so a
         // `source` here would clobber the envelope and the page would drop it.
         report({ phase: 'replenish', sourceUrl: src });
-        console.log('[BG][hunt] replenishing from', src);
+        console.log(`[BG][hunt] replenishing from ${src} (round ${replenishRound})`);
         const urls = await navigateAndHarvest(tab.id, src, HARVEST_MS_PER_SOURCE + 25000);
+        const sizeBefore = frontier.length;
         pushFrontier(urls);
-        console.log(`[BG][hunt] +${urls.length} urls, frontier=${frontier.length}`);
-        if (frontier.length === 0) continue; // try next source
+        const added = frontier.length - sizeBefore;
+        dryRounds = added === 0 ? dryRounds + 1 : 0;
+        console.log(`[BG][hunt] +${added} new urls (saw ${urls.length}), frontier=${frontier.length}`);
+        if (frontier.length === 0) continue; // try the next source
       }
 
       const target = frontier.shift();
@@ -308,7 +311,6 @@ async function huntReels(opts, appTabId) {
   const stopReason = huntAbort ? 'stopped'
     : qualified.length >= targetCount ? 'target_reached'
     : checked >= maxChecks ? 'max_checks'
-    : Date.now() >= deadline ? 'timeout'
     : 'sources_exhausted';
   console.log(`[BG][hunt] done: ${qualified.length}/${targetCount} qualified after ${checked} checks (${stopReason})`);
   return { ok: true, reels: qualified, checked, stopReason };
