@@ -110,8 +110,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         missions.delete(sender.tab.id);
         chrome.tabs.remove(sender.tab.id).catch(() => {});
       }
-      p.resolve(msg.comments || []);
+      p.resolve({ comments: msg.comments || [], foundUrls: msg.foundUrls || [] });
     }
+    return false;
+  }
+
+  // Web app starts / stops a hunt
+  if (msg?.type === 'HUNT_REELS') {
+    huntReels(msg.opts || {}, sender.tab?.id).then(sendResponse);
+    return true;
+  }
+  if (msg?.type === 'HUNT_ABORT') {
+    huntAbort = true;
+    sendResponse({ ok: true });
     return false;
   }
 
@@ -150,6 +161,174 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false;
   }
 });
+
+// ---- REEL HUNTER FLOW ----
+// Walk Facebook Reels one at a time: load a reel, scrape its comments, count
+// how many match the intent keywords, keep it if it clears the threshold.
+// Repeat until we have `targetCount` qualifying reels (or run out of budget).
+//
+// Advancing is done by NAVIGATING to the next reel URL rather than faking
+// swipe/keyboard events — FB ignores synthetic ArrowDown and the reel feed
+// isn't window-scrollable, which is why event-based walking yielded 1 reel.
+// Every page load renders exactly one reel, so the comments we read always
+// belong to the reel we think they do.
+
+let huntAbort = false;
+
+function normalizeVi(str) {
+  return (str || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+}
+
+function countIntentMatches(comments, keywords) {
+  const kws = (keywords || []).map(normalizeVi).filter(Boolean);
+  const matched = [];
+  for (const c of comments || []) {
+    const nc = normalizeVi(c);
+    if (kws.some((k) => nc.includes(k))) matched.push(String(c).trim());
+  }
+  return matched;
+}
+
+async function huntReels(opts, appTabId) {
+  const {
+    targetCount = 10,
+    minIntent = 2,
+    intentKeywords = [],
+    searchKeywords = [],
+    maxChecks = 120,
+    budgetMs = 15 * 60 * 1000,
+    excludeUrls = [],
+  } = opts || {};
+
+  huntAbort = false;
+  const deadline = Date.now() + budgetMs;
+  const visited = new Set((excludeUrls || []).map((u) => canonicalReelUrl(u) || u));
+  const qualified = [];
+  const frontier = [];
+  let checked = 0;
+
+  const pushFrontier = (urls) => {
+    for (const u of urls || []) {
+      const c = canonicalReelUrl(u) || u;
+      if (c && !visited.has(c) && !frontier.includes(c)) frontier.push(c);
+    }
+  };
+
+  const report = (extra) => {
+    if (appTabId == null) return;
+    chrome.tabs.sendMessage(appTabId, {
+      type: 'HUNT_PROGRESS',
+      checked,
+      qualifiedCount: qualified.length,
+      frontier: frontier.length,
+      ...extra,
+    }).catch(() => {});
+  };
+
+  let tab;
+  try {
+    tab = await chrome.tabs.create({ url: 'about:blank', active: false });
+  } catch (e) {
+    return { ok: false, error: 'tab_create_failed', reels: [] };
+  }
+  ensureKeepAlive();
+  const settings = await getSettings();
+
+  // Replenishment sources, tried in order whenever the frontier runs dry.
+  const replenishSources = ['https://www.facebook.com/reel/', 'https://www.facebook.com/watch/'];
+  for (const kw of searchKeywords) {
+    replenishSources.push(`https://www.facebook.com/search/videos/?q=${encodeURIComponent(kw)}`);
+  }
+  let replenishIdx = 0;
+
+  try {
+    while (
+      qualified.length < targetCount &&
+      checked < maxChecks &&
+      Date.now() < deadline &&
+      !huntAbort
+    ) {
+      // Out of reels to try → harvest a fresh batch from the next source
+      if (frontier.length === 0) {
+        if (replenishIdx >= replenishSources.length) {
+          console.log('[BG][hunt] all replenish sources exhausted');
+          break;
+        }
+        const src = replenishSources[replenishIdx++];
+        // NB: field must NOT be called `source` — page_bridge wraps progress in
+        // an envelope keyed `source: TAG` and spreads the message over it, so a
+        // `source` here would clobber the envelope and the page would drop it.
+        report({ phase: 'replenish', sourceUrl: src });
+        console.log('[BG][hunt] replenishing from', src);
+        const urls = await navigateAndHarvest(tab.id, src, HARVEST_MS_PER_SOURCE + 25000);
+        pushFrontier(urls);
+        console.log(`[BG][hunt] +${urls.length} urls, frontier=${frontier.length}`);
+        if (frontier.length === 0) continue; // try next source
+      }
+
+      const target = frontier.shift();
+      visited.add(target);
+      checked++;
+      report({ phase: 'checking', current: target });
+
+      const result = await navigateAndScrape(tab.id, target, settings.perTabTimeoutMs, true);
+      const comments = result.comments || [];
+      // Reel pages sometimes expose neighbouring reels — keeps the crawl going
+      pushFrontier(result.foundUrls);
+
+      const matched = countIntentMatches(comments, intentKeywords);
+      const pass = matched.length >= minIntent;
+      console.log(
+        `[BG][hunt] ${checked}. ${pass ? '✅' : '✗'} ${target} → ${comments.length} comments, ${matched.length} intent`
+      );
+
+      if (pass) {
+        qualified.push({
+          url: target,
+          comments,
+          intentCount: matched.length,
+          intentComments: matched,
+          commentCount: comments.length,
+        });
+      }
+
+      report({
+        phase: 'checked',
+        current: target,
+        lastCommentCount: comments.length,
+        lastIntentCount: matched.length,
+        lastPassed: pass,
+      });
+    }
+  } finally {
+    missions.delete(tab.id);
+    chrome.tabs.remove(tab.id).catch(() => {});
+  }
+
+  const stopReason = huntAbort ? 'stopped'
+    : qualified.length >= targetCount ? 'target_reached'
+    : checked >= maxChecks ? 'max_checks'
+    : Date.now() >= deadline ? 'timeout'
+    : 'sources_exhausted';
+  console.log(`[BG][hunt] done: ${qualified.length}/${targetCount} qualified after ${checked} checks (${stopReason})`);
+  return { ok: true, reels: qualified, checked, stopReason };
+}
+
+function canonicalReelUrl(raw) {
+  if (!raw) return null;
+  try {
+    const u = new URL(raw, 'https://www.facebook.com');
+    let m = u.pathname.match(/^\/reels?\/(\d{8,})/);
+    if (m) return `https://www.facebook.com/reel/${m[1]}`;
+    if (u.pathname.startsWith('/watch')) {
+      const v = u.searchParams.get('v');
+      if (v && /^\d{8,}$/.test(v)) return `https://www.facebook.com/watch/?v=${v}`;
+    }
+    m = u.pathname.match(/^\/([^/]+)\/videos\/(\d{8,})/);
+    if (m) return `https://www.facebook.com/${m[1]}/videos/${m[2]}`;
+  } catch (e) {}
+  return null;
+}
 
 // ---- DISCOVER FLOW ----
 
@@ -268,21 +447,27 @@ function navigateAndHarvest(tabId, url, timeoutMs) {
 
 // Navigate an existing tab to a reel URL and wait for its content script to
 // report the comments it scraped. Tab is kept open for reuse.
-function navigateAndScrape(tabId, url, timeoutMs) {
+// `rich` callers get {comments, foundUrls}; legacy callers get a bare array.
+function navigateAndScrape(tabId, url, timeoutMs, rich) {
   return new Promise(async (resolve) => {
+    const empty = rich ? { comments: [], foundUrls: [] } : [];
     missions.set(tabId, { mode: 'scrape' });
     try {
       await chrome.tabs.update(tabId, { url });
     } catch (e) {
-      resolve([]);
+      resolve(empty);
       return;
     }
     const timer = setTimeout(() => {
       pendingScrapes.delete(tabId);
-      resolve([]);
+      resolve(empty);
     }, timeoutMs);
     pendingScrapes.set(tabId, {
-      resolve: (comments) => { clearTimeout(timer); resolve(comments || []); },
+      resolve: (payload) => {
+        clearTimeout(timer);
+        const comments = payload?.comments || [];
+        resolve(rich ? { comments, foundUrls: payload?.foundUrls || [] } : comments);
+      },
       timer,
       keepTab: true,
     });

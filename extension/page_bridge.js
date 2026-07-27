@@ -12,6 +12,16 @@
   announce();
   document.addEventListener('DOMContentLoaded', announce);
 
+  // Background pushes live hunt progress here via chrome.tabs.sendMessage;
+  // relay it into the page so the UI can update while the hunt runs.
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg?.type === 'HUNT_PROGRESS') {
+      // Spread first, then set the envelope keys, so a payload field can never
+      // clobber `source`/`type` and get the message dropped by the page.
+      window.postMessage({ ...msg, source: TAG, type: 'HUNT_PROGRESS' }, '*');
+    }
+  });
+
   window.addEventListener('message', async (e) => {
     if (e.source !== window) return;
     const msg = e.data;
@@ -19,6 +29,30 @@
 
     if (msg.type === 'PING') {
       window.postMessage({ source: TAG, type: 'PONG', requestId: msg.requestId, version: chrome.runtime.getManifest().version }, '*');
+      return;
+    }
+
+    if (msg.type === 'HUNT_REELS') {
+      try {
+        const response = await chrome.runtime.sendMessage({
+          type: 'HUNT_REELS',
+          opts: msg.opts || {},
+        });
+        window.postMessage(
+          { source: TAG, type: 'HUNT_DONE', requestId: msg.requestId, response },
+          '*'
+        );
+      } catch (err) {
+        window.postMessage(
+          { source: TAG, type: 'HUNT_ERROR', requestId: msg.requestId, error: String(err) },
+          '*'
+        );
+      }
+      return;
+    }
+
+    if (msg.type === 'HUNT_ABORT') {
+      try { await chrome.runtime.sendMessage({ type: 'HUNT_ABORT' }); } catch (_) {}
       return;
     }
 

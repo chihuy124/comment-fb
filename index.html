@@ -70,6 +70,15 @@
                     <span>Quét Reels Phim 🔥</span>
                 </button>
 
+                <button class="nav-item" data-tab="hunter-tab" id="nav-hunter">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <circle cx="12" cy="12" r="6"></circle>
+                        <circle cx="12" cy="12" r="2"></circle>
+                    </svg>
+                    <span>Săn Reels Chất Lượng 🎯</span>
+                </button>
+
                 <button class="nav-item" data-tab="settings-tab" id="nav-settings">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <circle cx="12" cy="12" r="3"></circle>
@@ -360,6 +369,79 @@
                                 <div class="empty-state" style="padding:2rem 1rem;">
                                     <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
                                     <p>Nhấn "🚀 Discover + Cào Comment" để extension đi qua feed Reels của bạn và tìm các bài đang có nhiều người xin link / hỏi tập 2.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB: REEL HUNTER — walk FB Reels one by one until N qualify -->
+            <div id="hunter-tab" class="tab-content">
+                <div class="scanner-grid">
+                    <div class="card card-panel">
+                        <div class="card-header">
+                            <h3>Cấu hình Săn Reels 🎯</h3>
+                        </div>
+                        <div class="card-body">
+                            <div class="form-group">
+                                <label for="hunt-target-count">Số Reels đạt chuẩn cần tìm:</label>
+                                <input type="number" id="hunt-target-count" class="form-control" value="10" min="1" max="100">
+                                <small class="form-help">Hệ thống đi từng Reel một, chỉ dừng khi gom đủ số này. Càng lớn càng lâu.</small>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="hunt-min-intent">Số comment hỏi tối thiểu để tính là đạt chuẩn:</label>
+                                <input type="number" id="hunt-min-intent" class="form-control" value="2" min="1" max="50">
+                                <small class="form-help">Đếm theo bộ "từ khóa nhu cầu cao" bên tab Quét Reels Phim.</small>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="hunt-max-checks">Giới hạn số Reels được kiểm (tránh chạy vô hạn):</label>
+                                <input type="number" id="hunt-max-checks" class="form-control" value="120" min="5" max="500">
+                                <small class="form-help">Dừng khi đã kiểm đủ số này dù chưa gom đủ Reels đạt chuẩn.</small>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="hunt-budget-min">Thời gian tối đa (phút):</label>
+                                <input type="number" id="hunt-budget-min" class="form-control" value="15" min="1" max="60">
+                                <small class="form-help">Hết thời gian là dừng và trả về những gì đã gom được.</small>
+                            </div>
+
+                            <div class="form-group">
+                                <label class="checkbox-label" style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
+                                    <input type="checkbox" id="hunt-skip-existing" checked>
+                                    <span style="font-size:0.9rem; font-weight:600; color:var(--accent-blue);">Bỏ qua Reels đã có trong Bảng Seeding</span>
+                                </label>
+                            </div>
+
+                            <button class="btn btn-primary" id="btn-start-hunt" disabled style="width:100%; margin-top:0.5rem;">
+                                <span>🎯 Bắt Đầu Săn Reels</span>
+                            </button>
+                            <button class="btn btn-secondary btn-sm" id="btn-stop-hunt" disabled style="width:100%; margin-top:0.5rem;">
+                                <span>■ Dừng lại</span>
+                            </button>
+
+                            <div id="hunt-ext-note" style="margin-top:0.75rem; font-size:0.8rem; color:var(--text-muted);">
+                                Cần cài Chrome Extension và đăng nhập Facebook trên trình duyệt này.
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card card-panel">
+                        <div class="card-header" style="flex-wrap:wrap; gap:0.5rem;">
+                            <h3 style="flex:1; min-width:180px;">Reels Đạt Chuẩn</h3>
+                            <button class="btn btn-primary btn-sm" id="btn-import-hunted" disabled>
+                                <span>Đẩy Tất Cả Vào Bảng Seeding</span>
+                            </button>
+                        </div>
+                        <div id="hunt-progress" style="padding:0.7rem 1rem; border-bottom:1px solid var(--border-color); font-size:0.85rem; color:var(--text-secondary);">
+                            Chưa chạy.
+                        </div>
+                        <div class="card-body">
+                            <div id="hunt-results-container" class="variant-box-list">
+                                <div class="empty-state" style="padding:2rem 1rem;">
+                                    <p>Nhấn "🎯 Bắt Đầu Săn Reels" — hệ thống sẽ đi vào feed Reels của Facebook, cào comment từng video và chỉ giữ lại các Reels có đủ số người hỏi link.</p>
                                 </div>
                             </div>
                         </div>

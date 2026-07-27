@@ -59,6 +59,19 @@ document.addEventListener('DOMContentLoaded', () => {
         scannedResultsContainer: document.getElementById('scanned-results-container'),
         btnImportScannedAll: document.getElementById('btn-import-scanned-all'),
         btnDiscoverFeed: document.getElementById('btn-discover-feed'),
+
+        // Reel Hunter tab
+        huntTargetCount: document.getElementById('hunt-target-count'),
+        huntMinIntent: document.getElementById('hunt-min-intent'),
+        huntMaxChecks: document.getElementById('hunt-max-checks'),
+        huntBudgetMin: document.getElementById('hunt-budget-min'),
+        huntSkipExisting: document.getElementById('hunt-skip-existing'),
+        btnStartHunt: document.getElementById('btn-start-hunt'),
+        btnStopHunt: document.getElementById('btn-stop-hunt'),
+        huntProgress: document.getElementById('hunt-progress'),
+        huntResultsContainer: document.getElementById('hunt-results-container'),
+        btnImportHunted: document.getElementById('btn-import-hunted'),
+        huntExtNote: document.getElementById('hunt-ext-note'),
         extStatusBanner: document.getElementById('ext-status-banner'),
         intentKeywordsContainer: document.getElementById('intent-keywords-container'),
         inputNewIntentKeyword: document.getElementById('input-new-intent-keyword'),
@@ -79,6 +92,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let intentKeywords = getStoredIntentKeywords();
     let extensionReady = false;
     let extensionVersion = null;
+    let huntedItems = [];
+    let huntRunning = false;
 
     function getStoredIntentKeywords() {
         const stored = localStorage.getItem('fb_intent_keywords');
@@ -137,6 +152,7 @@ document.addEventListener('DOMContentLoaded', () => {
         'posts-tab': { title: 'Quản lý danh sách bài viết mục tiêu', subtitle: 'Thêm, sửa, xóa các bài viết Facebook của người khác / Group cần seeding.' },
         'spintax-tab': { title: 'Bộ mẫu & Trình tạo Spintax Phim', subtitle: 'Thiết lập cú pháp {A|B|C} và {link_fb} để tạo hàng ngàn câu comment biến thể không trùng lặp.' },
         'scanner-tab': { title: 'Quét Reels Phim & Phân Tích Comment Nhu Cầu Cao 🔥', subtitle: 'Tự động lọc các video Reels đang có nhiều người comment hỏi xin link / hỏi tập 2.' },
+        'hunter-tab': { title: 'Săn Reels Chất Lượng 🎯', subtitle: 'Đi từng Reel một trên Facebook, cào comment thật và chỉ dừng khi gom đủ số Reels đạt chuẩn bạn đặt.' },
         'settings-tab': { title: 'Cài đặt & Quản lý dữ liệu', subtitle: 'Sao lưu dữ liệu LocalStorage và xem hướng dẫn thao tác an toàn.' }
     };
 
@@ -437,11 +453,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 elements.btnDiscoverFeed.disabled = false;
                 elements.btnDiscoverFeed.title = 'Mở tab ẩn feed FB, cào comment thật của từng Reel';
             }
+            if (elements.btnStartHunt && !huntRunning) elements.btnStartHunt.disabled = false;
+            if (elements.huntExtNote) {
+                elements.huntExtNote.innerHTML = `<span style="color:#22c55e;">✅ Extension đã kết nối (v${extensionVersion || '?'}).</span>`;
+            }
         } else {
             elements.extStatusBanner.innerHTML = `Extension chưa phát hiện. Xem <a href="extension/README.md" target="_blank" style="color:var(--accent-blue);">hướng dẫn cài</a> để cào Reels + comment thật từ session FB.`;
             if (elements.btnDiscoverFeed) {
                 elements.btnDiscoverFeed.disabled = true;
                 elements.btnDiscoverFeed.title = 'Cần cài Chrome Extension trước';
+            }
+            if (elements.btnStartHunt) elements.btnStartHunt.disabled = true;
+            if (elements.huntExtNote) {
+                elements.huntExtNote.textContent = 'Cần cài Chrome Extension và đăng nhập Facebook trên trình duyệt này.';
             }
         }
     }
@@ -477,6 +501,175 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function scrapeIdFromRequest() {
         return `req_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+    }
+
+    // --- REEL HUNTER ---
+    // Walks FB Reels one at a time via the extension, keeping only reels whose
+    // comments clear the intent threshold, until the target count is reached.
+
+    function renderHuntProgress(text) {
+        if (elements.huntProgress) elements.huntProgress.innerHTML = text;
+    }
+
+    function setHuntRunning(running) {
+        huntRunning = running;
+        if (elements.btnStartHunt) {
+            elements.btnStartHunt.disabled = running || !extensionReady;
+            elements.btnStartHunt.innerHTML = running
+                ? '<span>🎯 Đang săn...</span>'
+                : '<span>🎯 Bắt Đầu Săn Reels</span>';
+        }
+        if (elements.btnStopHunt) elements.btnStopHunt.disabled = !running;
+    }
+
+    function renderHuntResults() {
+        if (!elements.huntResultsContainer) return;
+        elements.huntResultsContainer.innerHTML = '';
+
+        const existingUrls = new Set(StorageManager.getPosts().map(p => p.url));
+        const fresh = huntedItems.filter(i => !existingUrls.has(i.url));
+        if (elements.btnImportHunted) elements.btnImportHunted.disabled = fresh.length === 0;
+
+        if (huntedItems.length === 0) {
+            elements.huntResultsContainer.innerHTML = `
+                <div class="empty-state" style="padding:2rem 1rem;">
+                    <p>Chưa có Reels đạt chuẩn. Nhấn "🎯 Bắt Đầu Săn Reels" để bắt đầu.</p>
+                </div>`;
+            return;
+        }
+
+        huntedItems.forEach((item, index) => {
+            const isAlreadyAdded = existingUrls.has(item.url);
+            const box = document.createElement('div');
+            box.className = 'variant-item';
+            box.style.cssText = 'flex-direction:column; align-items:flex-start; gap:0.5rem; padding:1rem; margin-bottom:0.75rem;';
+            box.innerHTML = `
+                <div style="display:flex; justify-content:space-between; width:100%; align-items:center; gap:0.4rem;">
+                    <a href="${escapeHtml(item.url)}" target="_blank" class="post-link-preview">${truncateUrl(item.url, 42)}</a>
+                    <div style="display:flex; gap:0.4rem; align-items:center;">
+                        ${isAlreadyAdded ? '<span class="post-status-badge status-completed" style="font-size:0.72rem;">✓ Đã có</span>' : ''}
+                        <span class="post-tag-badge" style="background:rgba(239,68,68,0.15); color:var(--accent-red); font-weight:700;">🔥 ${item.intentCount} comment hỏi</span>
+                    </div>
+                </div>
+                <div style="font-size:0.82rem; color:var(--text-secondary); background:var(--bg-surface); padding:0.6rem 0.85rem; border-radius:6px; width:100%;">
+                    <strong>Comment hỏi link / hỏi tập (thật):</strong>
+                    <ul style="margin:0.4rem 0 0 1.2rem; padding:0;">
+                        ${item.intentComments.slice(0, 12).map(c => `<li><code>${escapeHtml(c)}</code></li>`).join('')}
+                    </ul>
+                    <div style="margin-top:0.4rem; color:var(--text-muted); font-size:0.75rem;">Đã đọc ${item.commentCount || 0} comment · khớp ${item.intentCount}</div>
+                </div>
+                ${isAlreadyAdded
+                    ? `<button class="btn btn-secondary btn-sm" disabled style="opacity:0.6;">✓ Đã trong Bảng Seeding</button>`
+                    : `<button class="btn btn-secondary btn-sm btn-import-single-hunt" data-index="${index}">+ Đẩy bài này vào Bảng Seeding</button>`}
+            `;
+            elements.huntResultsContainer.appendChild(box);
+        });
+
+        elements.huntResultsContainer.querySelectorAll('.btn-import-single-hunt').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const item = huntedItems[parseInt(e.currentTarget.getAttribute('data-index'))];
+                if (!item) return;
+                StorageManager.addBulkPosts([item.url], 'PHIM_PROMO', `Săn Reels (🔥 ${item.intentCount} hỏi)`);
+                showToast('Đã đẩy Reel này vào Bảng Seeding!', 'success');
+                renderAll();
+                renderHuntResults();
+            });
+        });
+    }
+
+    async function startHunt() {
+        if (!extensionReady) {
+            showToast('Chưa cài extension. Xem tab Cài đặt để làm theo.', 'warning');
+            return;
+        }
+        if (huntRunning) return;
+
+        const targetCount = Math.max(1, parseInt(elements.huntTargetCount?.value) || 10);
+        const minIntent = Math.max(1, parseInt(elements.huntMinIntent?.value) || 2);
+        const maxChecks = Math.max(5, parseInt(elements.huntMaxChecks?.value) || 120);
+        const budgetMs = Math.max(1, parseInt(elements.huntBudgetMin?.value) || 15) * 60 * 1000;
+        const skipExisting = elements.huntSkipExisting ? elements.huntSkipExisting.checked : true;
+        const searchKeywords = (elements.scanKeywordInput?.value || '')
+            .split(',').map(k => k.trim()).filter(Boolean);
+        const excludeUrls = skipExisting ? StorageManager.getPosts().map(p => p.url) : [];
+
+        huntedItems = [];
+        renderHuntResults();
+        setHuntRunning(true);
+        renderHuntProgress(`Đang khởi động... Mục tiêu ${targetCount} Reels đạt chuẩn (≥${minIntent} comment hỏi).`);
+
+        const requestId = scrapeIdFromRequest();
+        const done = new Promise((resolve, reject) => {
+            // Hard ceiling a bit past the extension's own budget
+            const timeout = setTimeout(() => reject(new Error('hunt_timeout')), budgetMs + 120000);
+            const listener = (e) => {
+                if (e.source !== window) return;
+                const msg = e.data;
+                if (!msg || msg.source !== EXT_TAG) return;
+
+                if (msg.type === 'HUNT_PROGRESS') {
+                    const parts = [
+                        `<strong>Đã kiểm ${msg.checked || 0} Reels</strong>`,
+                        `<span style="color:#22c55e;">${msg.qualifiedCount || 0}/${targetCount} đạt chuẩn</span>`,
+                    ];
+                    if (msg.phase === 'replenish') {
+                        parts.push(`<span style="color:var(--text-muted);">đang lấy thêm Reels từ ${escapeHtml(String(msg.sourceUrl || '').replace('https://www.facebook.com', ''))}</span>`);
+                    } else if (msg.phase === 'checked') {
+                        parts.push(`<span style="color:var(--text-muted);">Reel vừa xong: ${msg.lastCommentCount || 0} comment, ${msg.lastIntentCount || 0} khớp ${msg.lastPassed ? '✅' : '✗'}</span>`);
+                    } else if (msg.phase === 'checking') {
+                        parts.push(`<span style="color:var(--text-muted);">đang đọc comment...</span>`);
+                    }
+                    renderHuntProgress(parts.join(' · '));
+                    return;
+                }
+
+                if (msg.requestId !== requestId) return;
+                if (msg.type === 'HUNT_DONE') {
+                    clearTimeout(timeout);
+                    window.removeEventListener('message', listener);
+                    resolve(msg.response);
+                } else if (msg.type === 'HUNT_ERROR') {
+                    clearTimeout(timeout);
+                    window.removeEventListener('message', listener);
+                    reject(new Error(msg.error));
+                }
+            };
+            window.addEventListener('message', listener);
+        });
+
+        window.postMessage({
+            source: EXT_TAG, type: 'HUNT_REELS', requestId,
+            opts: { targetCount, minIntent, intentKeywords, searchKeywords, maxChecks, budgetMs, excludeUrls },
+        }, '*');
+
+        try {
+            const response = await done;
+            huntedItems = (response?.reels || []).filter(r => r && r.url);
+            const reasons = {
+                target_reached: 'đã gom đủ mục tiêu',
+                max_checks: 'đã kiểm hết giới hạn số Reels',
+                timeout: 'hết thời gian',
+                stopped: 'bạn đã bấm dừng',
+                sources_exhausted: 'Facebook không trả thêm Reels mới',
+            };
+            const why = reasons[response?.stopReason] || response?.stopReason || '';
+            renderHuntProgress(`<strong>Xong:</strong> ${huntedItems.length}/${targetCount} Reels đạt chuẩn sau khi kiểm ${response?.checked || 0} Reels — ${why}.`);
+            showToast(`Săn xong: ${huntedItems.length} Reels đạt chuẩn (kiểm ${response?.checked || 0} bài).`, 'success');
+            renderHuntResults();
+        } catch (err) {
+            console.error(err);
+            renderHuntProgress(`<span style="color:var(--accent-red);">Lỗi: ${escapeHtml(err.message)}</span>`);
+            showToast(`Săn Reels lỗi: ${err.message}`, 'warning');
+        } finally {
+            setHuntRunning(false);
+        }
+    }
+
+    function stopHunt() {
+        if (!huntRunning) return;
+        window.postMessage({ source: EXT_TAG, type: 'HUNT_ABORT' }, '*');
+        renderHuntProgress('Đang dừng... chờ Reel hiện tại xong.');
+        showToast('Đã yêu cầu dừng. Kết quả đã gom vẫn được giữ.', 'info');
     }
 
     // Ask extension to open FB feed in a hidden tab, scroll, and return
@@ -751,6 +944,22 @@ document.addEventListener('DOMContentLoaded', () => {
         // Min-intent threshold now filters the list live, client-side
         if (elements.minIntentCount) {
             elements.minIntentCount.addEventListener('input', renderScannedResults);
+        }
+
+        // Reel Hunter tab
+        if (elements.btnStartHunt) elements.btnStartHunt.addEventListener('click', startHunt);
+        if (elements.btnStopHunt) elements.btnStopHunt.addEventListener('click', stopHunt);
+        if (elements.btnImportHunted) {
+            elements.btnImportHunted.addEventListener('click', () => {
+                const existingUrls = new Set(StorageManager.getPosts().map(p => p.url));
+                const fresh = huntedItems.filter(i => !existingUrls.has(i.url));
+                if (fresh.length === 0) return;
+                StorageManager.addBulkPosts(fresh.map(i => i.url), 'PHIM_PROMO', 'Săn Reels 🎯');
+                showToast(`Đã đẩy ${fresh.length} Reels đạt chuẩn vào Bảng Seeding!`, 'success');
+                renderAll();
+                renderHuntResults();
+                switchTab('dashboard-tab');
+            });
         }
         // Extension might inject before or after our listener — ping proactively
         setTimeout(() => {

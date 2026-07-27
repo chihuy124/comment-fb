@@ -26,7 +26,10 @@
     if (mission.mode === 'scrape') {
       await sleep(2000);
       const comments = await scrapeComments();
-      chrome.runtime.sendMessage({ type: 'SCRAPE_RESULT', url: location.href, comments });
+      // Reel pages sometimes reference neighbouring reels — hand them back so
+      // the hunter can keep walking without another harvest round.
+      const foundUrls = Array.from(sweepReelUrls());
+      chrome.runtime.sendMessage({ type: 'SCRAPE_RESULT', url: location.href, comments, foundUrls });
       return;
     }
   } catch (e) {
