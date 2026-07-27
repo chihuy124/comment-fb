@@ -126,14 +126,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
-  // Content script reports discover done
+  // Content script reports discover done (new: reels payload includes comments)
   if (msg?.type === 'DISCOVER_RESULT' && sender.tab?.id != null) {
     const p = pendingDiscovers.get(sender.tab.id);
     if (p) {
       clearTimeout(p.timer);
       pendingDiscovers.delete(sender.tab.id);
       missions.delete(sender.tab.id);
-      p.resolve(msg.urls || []);
+      // Support both old shape (urls: string[]) and new shape (reels: [{url, comments}])
+      p.resolve(msg.reels || msg.urls || []);
       chrome.tabs.remove(sender.tab.id).catch(() => {});
     }
     return false;
@@ -230,7 +231,8 @@ async function discoverFromFeed(durationMs, startUrl) {
     }, durationMs + 25000);
 
     pendingDiscovers.set(tab.id, {
-      resolve: (urls) => resolve({ ok: true, urls }),
+      // 'data' is either urls: string[] (old) or reels: [{url, comments}] (new)
+      resolve: (data) => resolve({ ok: true, reels: data }),
       timer,
     });
   });

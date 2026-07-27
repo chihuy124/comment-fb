@@ -612,11 +612,11 @@ document.addEventListener('DOMContentLoaded', () => {
             showToast('Chưa cài extension. Xem extension/README.md.', 'warning');
             return;
         }
-        const durationMs = 45000;
+        const durationMs = 120000; // 2 min — enough for ~15-25 reels with per-reel scrape
         const requestId = scrapeIdFromRequest();
         elements.btnDiscoverFeed.disabled = true;
-        elements.btnDiscoverFeed.innerHTML = `<span>🔍 Đang scroll feed FB ${durationMs/1000}s...</span>`;
-        showToast(`Extension mở tab ẩn facebook.com/reel/, scroll ${durationMs/1000}s để thu thập URL. Vui lòng đảm bảo đã login FB trên trình duyệt này.`, 'info');
+        elements.btnDiscoverFeed.innerHTML = `<span>🚀 Đang cào feed FB (~${durationMs/1000}s)...</span>`;
+        showToast(`Extension mở tab ẩn FB, mỗi Reel cào comment thật ngay tại chỗ rồi mới sang Reel tiếp. Chạy ~${durationMs/1000}s. Đảm bảo đã login FB.`, 'info');
 
         const done = new Promise((resolve, reject) => {
             const timeout = setTimeout(() => reject(new Error('discover_timeout')), durationMs + 30000);
@@ -641,34 +641,40 @@ document.addEventListener('DOMContentLoaded', () => {
 
         try {
             const response = await done;
-            const urls = (response?.urls || []).filter(u => typeof u === 'string' && u.startsWith('http'));
+            // New payload: reels = [{url, comments}]. Legacy: reels = [url strings].
+            const raw = response?.reels || response?.urls || [];
+            const reelObjs = raw.map(x => (typeof x === 'string') ? { url: x, comments: [] } : x)
+                                .filter(r => r && typeof r.url === 'string' && r.url.startsWith('http'));
+
             const existingPosts = StorageManager.getPosts();
             const existingSet = new Set([
                 ...existingPosts.map(p => p.url),
                 ...scannedItems.map(i => i.url),
             ]);
             let added = 0;
-            urls.forEach(url => {
-                if (!existingSet.has(url)) {
-                    scannedItems.push({
-                        url,
-                        tag: 'Discovered từ Feed FB',
-                        intentCount: 0,
-                        intentComments: [],
-                        source: 'fb_feed',
-                    });
-                    existingSet.add(url);
-                    added++;
-                }
+            let totalIntent = 0;
+            reelObjs.forEach(({ url, comments }) => {
+                if (existingSet.has(url)) return;
+                const matched = matchIntent(comments || [], intentKeywords);
+                totalIntent += matched.length;
+                scannedItems.push({
+                    url,
+                    tag: 'Feed FB + Comment thật',
+                    intentCount: matched.length,
+                    intentComments: matched.length ? matched : (comments || []).slice(0, 5),
+                    source: 'fb_feed_scraped',
+                });
+                existingSet.add(url);
+                added++;
             });
-            showToast(`Discover xong: ${urls.length} URL từ feed, thêm mới ${added} vào danh sách. Bấm "🧩 Cào Comment Thật" để lọc theo intent.`, 'success');
+            showToast(`Xong: ${reelObjs.length} Reel + comment thật. Thêm mới ${added} bài, ${totalIntent} comment intent phát hiện.`, 'success');
             renderScannedResults();
         } catch (err) {
             console.error(err);
             showToast(`Discover lỗi: ${err.message}. Đảm bảo bạn đang login Facebook trên trình duyệt này.`, 'warning');
         } finally {
             elements.btnDiscoverFeed.disabled = false;
-            elements.btnDiscoverFeed.innerHTML = '<span>🔍 Discover từ Feed FB</span>';
+            elements.btnDiscoverFeed.innerHTML = '<span>🚀 Discover + Cào Comment</span>';
         }
     }
 
@@ -835,6 +841,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         ${item.source === 'search_engine' ? '<span class="post-tag-badge" style="background:rgba(59,130,246,0.15); color:#3b82f6; font-size:0.7rem;">🔎 Google/Bing</span>' : ''}
                         ${item.source === 'live' ? '<span class="post-tag-badge" style="background:rgba(34,197,94,0.15); color:#22c55e; font-size:0.7rem;">📡 Live FB</span>' : ''}
                         ${item.source === 'fb_feed' ? '<span class="post-tag-badge" style="background:rgba(168,85,247,0.15); color:#a855f7; font-size:0.7rem;">🔍 FB Feed</span>' : ''}
+                        ${item.source === 'fb_feed_scraped' ? '<span class="post-tag-badge" style="background:rgba(34,197,94,0.2); color:#22c55e; font-size:0.7rem;">🚀 Feed + Comment thật</span>' : ''}
                         ${item.source === 'live_extension' ? '<span class="post-tag-badge" style="background:rgba(34,197,94,0.2); color:#22c55e; font-size:0.7rem;">🧩 Comment thật</span>' : ''}
                         <span class="post-tag-badge" style="background:rgba(239, 68, 68, 0.15); color:var(--accent-red); font-weight:700;">🔥 ${item.intentCount} người comment hỏi</span>
                     </div>

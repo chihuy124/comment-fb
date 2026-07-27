@@ -62,66 +62,114 @@ function canonicalize(href) {
 // ---------- DISCOVER MODE ----------
 
 async function discoverMode(durationMs) {
-  console.log('[FB Seeding CS] discover mode start, duration =', durationMs);
-  const foundUrls = new Set();
+  // Combined discover + scrape: walk the vertical Reel feed, for each fresh
+  // reel we land on, pause its video, open the comment panel, extract
+  // comments right there. Return a list of {url, comments} pairs. This is
+  // guaranteed correct — comments are read while the reel is the focused
+  // one in the viewport, no pinning gymnastics needed.
+  console.log('[FB Seeding CS] discover+scrape mode start, duration =', durationMs);
+  const results = new Map(); // reelId -> {url, comments}
   const endTime = Date.now() + durationMs;
   let lastReport = 0;
+  let noAdvanceCount = 0;
 
-  // Tell background we started (also keeps SW alive)
   try {
     chrome.runtime.sendMessage({ type: 'DISCOVER_PROGRESS', count: 0, phase: 'start' });
   } catch (_) {}
 
-  const extract = () => {
-    // Current URL as feed navigates (SPA push-state)
-    const currentCanon = canonicalize(location.href);
-    if (currentCanon) foundUrls.add(currentCanon);
-
-    // Every <a href> on page
-    document.querySelectorAll('a[href]').forEach((a) => {
-      const canon = canonicalize(a.getAttribute('href'));
-      if (canon) foundUrls.add(canon);
-    });
-
-    // Regex the raw HTML — catches React fiber props / lazy-loaded reels
-    // (Bounded to first 500KB to avoid huge DOMs killing perf)
-    const html = document.documentElement.outerHTML.slice(0, 500_000);
-    const reelMatches = html.match(/\/reels?\/(\d{8,})/g) || [];
-    for (const m of reelMatches) {
-      const id = m.replace(/^\/reels?\//, '');
-      foundUrls.add(`https://www.facebook.com/reel/${id}`);
-    }
-    const watchMatches = html.match(/\/watch\/?\?v=(\d{8,})/g) || [];
-    for (const m of watchMatches) {
-      const id = m.match(/(\d{8,})/)[1];
-      foundUrls.add(`https://www.facebook.com/watch/?v=${id}`);
-    }
-  };
-
-  // Initial extract, then scroll / advance / re-extract loop
-  extract();
+  // Let the first reel load before we touch anything
+  await sleep(3500);
 
   while (Date.now() < endTime) {
-    // Two nudges: arrow-down (works on /reel/ vertical feed) + scroll (works on /watch/)
-    try {
-      const evOpts = { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, which: 40, bubbles: true, cancelable: true };
-      (document.activeElement || document.body).dispatchEvent(new KeyboardEvent('keydown', evOpts));
-      window.dispatchEvent(new KeyboardEvent('keydown', evOpts));
-    } catch (e) {}
-    window.scrollBy(0, window.innerHeight * 0.9);
-    await sleep(2200);
-    extract();
+    const before = extractReelId(location.href);
+    if (before && !results.has(before)) {
+      const canon = canonicalize(location.href);
+      console.log('[FB Seeding CS] scraping reel', before, '#', results.size + 1);
+      const comments = await quickScrapeCurrentReel();
+      results.set(before, { url: canon, comments });
+      noAdvanceCount = 0;
 
-    // Progress heartbeat every 5s
-    if (Date.now() - lastReport > 5000) {
-      lastReport = Date.now();
-      chrome.runtime.sendMessage({ type: 'DISCOVER_PROGRESS', count: foundUrls.size });
+      if (Date.now() - lastReport > 3000) {
+        lastReport = Date.now();
+        try {
+          chrome.runtime.sendMessage({ type: 'DISCOVER_PROGRESS', count: results.size });
+        } catch (_) {}
+      }
+    }
+
+    // Advance to next reel
+    await advanceToNextReel();
+    await sleep(2500);
+
+    // If URL didn't change 3 times in a row → probably stuck, break
+    const after = extractReelId(location.href);
+    if (after === before) {
+      noAdvanceCount++;
+      if (noAdvanceCount >= 3) {
+        console.warn('[FB Seeding CS] cannot advance, stopping');
+        break;
+      }
     }
   }
 
-  console.log('[FB Seeding CS] discover done, urls =', foundUrls.size);
-  chrome.runtime.sendMessage({ type: 'DISCOVER_RESULT', urls: Array.from(foundUrls) });
+  const payload = Array.from(results.values());
+  console.log('[FB Seeding CS] discover+scrape done, reels =', payload.length);
+  chrome.runtime.sendMessage({ type: 'DISCOVER_RESULT', reels: payload });
 }
+
+async function quickScrapeCurrentReel() {
+  // Pause videos so FB can't auto-advance while we open + read comments
+  document.querySelectorAll('video').forEach((v) => {
+    try { v.pause(); v.muted = true; } catch (_) {}
+  });
+
+  await dismissLoginNags();
+  const opened = await openCommentPanel();
+  if (!opened) return [];
+  await switchToAllComments();
+
+  const panel = findCommentScrollContainer();
+  // 3 scroll passes is enough to load ~15-30 comments — plenty for intent detection
+  for (let i = 0; i < 3; i++) {
+    if (panel) panel.scrollTop = panel.scrollHeight;
+    await sleep(800);
+    await clickMoreCommentsButtons();
+  }
+
+  const collected = collectCommentText();
+  const seen = new Set();
+  const uniq = [];
+  for (const c of collected) {
+    if (!seen.has(c)) { seen.add(c); uniq.push(c); }
+  }
+  console.log('[FB Seeding CS]   got', uniq.length, 'comments on reel', extractReelId(location.href));
+  return uniq.slice(0, 60);
+}
+
+async function advanceToNextReel() {
+  // Try three techniques — different FB layouts respond to different ones.
+  // 1) Click the down chevron button
+  const downBtns = Array.from(document.querySelectorAll('[aria-label]'))
+    .filter((el) => {
+      const l = (el.getAttribute('aria-label') || '').toLowerCase();
+      return l === 'next reel' || l === 'reel tiếp theo' || l === 'next video' ||
+             l === 'video tiếp theo' || l === 'reel kế tiếp';
+    });
+  for (const b of downBtns.slice(0, 1)) {
+    try { b.click(); return; } catch (_) {}
+  }
+
+  // 2) Arrow-Down keyboard event
+  const opts = { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, which: 40, bubbles: true, cancelable: true };
+  try {
+    (document.activeElement || document.body).dispatchEvent(new KeyboardEvent('keydown', opts));
+    window.dispatchEvent(new KeyboardEvent('keydown', opts));
+  } catch (_) {}
+
+  // 3) Scroll one viewport (covers /watch/ layout)
+  window.scrollBy(0, window.innerHeight);
+}
+
 
 // ---------- SCRAPE MODE (comments on a single Reel) ----------
 
