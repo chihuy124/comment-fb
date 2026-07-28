@@ -1,66 +1,66 @@
-// Chạy scrapeComments() thật trên một DOM giả lập đúng theo cấu trúc Reel thật
-// của Facebook (đã xác minh từ dump của user):
-//   - nút mở panel:      aria-label="Bình luận", nằm NGOÀI panel, trong khung feed
-//   - node bình luận:    aria-label="Bình luận dưới tên X vào N giờ trước"
-//   - nút tải thêm:      text "Xem thêm bình luận 8/38"
-//   - React của FB bỏ qua el.click() trần → fixture chỉ nghe 'mousedown'
-//   - khung feed cuộn được và bọc cả panel (đây là cái bẫy: nếu scrape cuộn
-//     nhầm nó thì reel bị nhảy sang cái kế tiếp)
+// Chạy scrapeComments() thật trên DOM jsdom dựng theo ĐÚNG hai UI bình luận
+// của Facebook mà user đã chụp màn hình:
+//
+//  UI A — permalink video: facebook.com/<page>/videos/<id>
+//    Panel bình luận nằm sẵn ở cột phải, KHÔNG cần bấm gì để mở.
+//    Đầu panel: "Bình luận" + link "Xem tất cả". Cuối: "Xem thêm bình luận 2/801".
+//    Tổng FB công bố (801) lớn hơn nhiều số nó chịu trả → phải dừng đúng lúc.
+//
+//  UI B — reel: facebook.com/reel/<id>
+//    Panel ĐÓNG. Phải bấm nút comment (aria-label="Bình luận", hiện số 22) nằm
+//    dưới nút like. Panel hiện ra bên phải, có dropdown "Phù hợp nhất" và
+//    "Xem thêm bình luận 6/22". Facebook preload reel kế bên nên trang có HAI
+//    nút comment — bấm nhầm cái ngoài màn hình là cào comment của reel khác.
+//
+// Fixture chỉ nghe 'mousedown', đúng như React của FB: el.click() trần không
+// kích hoạt gì cả.
 //
 // Chạy: node test/scrape-comments.js   (exit 0 = pass)
 
 const fs = require('fs');
 const { JSDOM } = require('jsdom');
 
-const TOTAL = 38;
-const PAGE = 8; // FB trả về từng đợt 8 comment mỗi lần bấm "Xem thêm bình luận"
-const REEL_URL = 'https://www.facebook.com/reel/1048646424518667';
-
-const INTENT_TEXTS = [
-  'Xem tiếp ở đâu ạ', 'cho xin link', 'Xem trọn bộ chỗ nào', 'xin tập tiếp theo',
-  'phim gì vậy ad', 'tên phim là gì', 'Xem tiếp tập sau', 'link phim với ạ',
+const INTENT = [
+  'Cho xem tập tiếp theo', 'Xem tiep', 'Xem chọn bộ', 'xin link',
+  'Xem trọn bộ ở đâu', 'tên phim gì vậy ad', 'Xem tiếp với', 'link phim ạ',
 ];
+const filler = (i) => `Bình luận thường số ${i + 1}`;
 
-function buildDom(opts = {}) {
-  const { counter = true, panelOpens = true } = opts;
-  const dom = new JSDOM(
-    `<!doctype html><html><body>
-      <div id="feed" style="overflow-y: auto">
-        <video></video>
-        <div id="reel">
-          <div role="button" id="cmt-btn" aria-label="Bình luận"><span>38</span></div>
-          <div id="panelwrap">
-            <div id="panel" style="overflow-y: auto">
-              <div role="button" id="sort"><span>Phù hợp nhất</span></div>
-              <div id="list"></div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </body></html>`,
-    { url: REEL_URL, pretendToBeVisual: true }
-  );
+// --------------------------------------------------------------- DOM helpers
 
+function makeDom(html, url) {
+  const dom = new JSDOM(`<!doctype html><html><body>${html}</body></html>`, {
+    url,
+    pretendToBeVisual: true,
+  });
   const { window } = dom;
   const doc = window.document;
 
-  // jsdom không có innerText. Content script đọc innerText khắp nơi, nên map
-  // tạm sang textContent — đủ sát cho DOM phẳng của fixture này.
+  // jsdom không có innerText. Content script đọc innerText khắp nơi.
   Object.defineProperty(window.HTMLElement.prototype, 'innerText', {
     get() { return this.textContent; },
     set(v) { this.textContent = v; },
     configurable: true,
   });
-  const feed = doc.getElementById('feed');
-  const panel = doc.getElementById('panel');
-  const list = doc.getElementById('list');
-  const btn = doc.getElementById('cmt-btn');
-  const sort = doc.getElementById('sort');
 
-  const state = { loaded: 0, sortedByAll: false, feedScrolls: 0, panelScrolls: 0 };
-
-  // jsdom không layout: tự khai báo kích thước để logic cuộn có cái mà đọc.
-  const sizes = (el, scrollH, clientH, onScroll) => {
+  // jsdom không layout: mọi phần tử cần một rect để visibleScore() so sánh.
+  const rectAll = (root, top = 300, height = 40) => {
+    [root, ...root.querySelectorAll('*')].forEach((el) => {
+      if (el.__rectFixed) return;
+      el.getBoundingClientRect = () => ({
+        top, bottom: top + height, left: 10, right: 210,
+        width: 200, height, x: 10, y: top,
+      });
+    });
+  };
+  const pinRect = (el, top, height = 40) => {
+    el.__rectFixed = true;
+    el.getBoundingClientRect = () => ({
+      top, bottom: top + height, left: 10, right: 210,
+      width: 200, height, x: 10, y: top,
+    });
+  };
+  const scrollable = (el, scrollH, clientH, onScroll) => {
     let top = 0;
     Object.defineProperty(el, 'scrollHeight', { get: () => scrollH });
     Object.defineProperty(el, 'clientHeight', { get: () => clientH });
@@ -69,190 +69,265 @@ function buildDom(opts = {}) {
       set: (v) => { top = v; onScroll && onScroll(); },
     });
   };
-  sizes(feed, 9000, 700, () => { state.feedScrolls++; });
-  sizes(panel, 4000, 600, () => { state.panelScrolls++; });
 
-  // Mọi phần tử đều có rect thật để visibleScore() so sánh được.
-  const rect = (el, top, height) => {
-    el.getBoundingClientRect = () => ({
-      top, bottom: top + height, left: 10, right: 210,
-      width: 200, height, x: 10, y: top,
-    });
-  };
-  [...doc.querySelectorAll('*')].forEach((el) => rect(el, 100, 40));
+  return { dom, window, doc, rectAll, pinRect, scrollable };
+}
 
-  function renderMore() {
-    const upto = Math.min(state.loaded + PAGE, TOTAL);
-    for (let i = state.loaded; i < upto; i++) {
-      const name = `Người ${i + 1}`;
-      const text = i < INTENT_TEXTS.length ? INTENT_TEXTS[i] : `Bình luận thường số ${i + 1}`;
-      const node = doc.createElement('div');
-      node.setAttribute('aria-label', `Bình luận dưới tên ${name} vào 3 giờ trước`);
-      node.innerHTML =
-        `<a role="link"><span>${name}</span></a><div dir="auto">${text}</div>`;
-      list.appendChild(node);
-      rect(node, 100, 40);
-      [...node.querySelectorAll('*')].forEach((el) => rect(el, 100, 40));
-    }
-    state.loaded = upto;
-    syncMoreButton();
-  }
-
-  function syncMoreButton() {
-    const old = doc.getElementById('more');
-    if (old) old.remove();
-    if (state.loaded >= TOTAL) return;
-    const more = doc.createElement('div');
-    more.id = 'more';
-    more.setAttribute('role', 'button');
-    more.innerHTML = counter
-      ? `<span>Xem thêm bình luận ${state.loaded}/${TOTAL}</span>`
-      : `<span>Xem thêm bình luận</span>`;
-    panel.appendChild(more);
-    rect(more, 100, 40);
-    rect(more.firstChild, 100, 40);
-    // React: chỉ phản ứng với chuỗi sự kiện chuột thật, KHÔNG với el.click().
-    more.addEventListener('mousedown', renderMore);
-  }
-
-  // Bấm nút "Bình luận" mới nạp panel (trước đó panel rỗng — đúng như tab sạch).
-  // panelOpens=false mô phỏng reel mà nút bấm mãi không mở được panel.
-  if (panelOpens) {
-    btn.addEventListener('mousedown', () => { if (state.loaded === 0) renderMore(); });
-  }
-
-  // Dropdown sắp xếp
-  sort.addEventListener('mousedown', () => {
-    if (doc.getElementById('sortmenu')) return;
-    const menu = doc.createElement('div');
-    menu.id = 'sortmenu';
-    menu.innerHTML =
-      `<div role="menuitem" id="opt-all">Tất cả bình luận</div>` +
-      `<div role="menuitem">Phù hợp nhất</div>`;
-    doc.body.appendChild(menu);
-    [...menu.querySelectorAll('*')].forEach((el) => rect(el, 100, 40));
-    doc.getElementById('opt-all').addEventListener('mousedown', () => {
-      state.sortedByAll = true;
-      menu.remove();
-    });
-  });
-
-  return { dom, window, doc, state };
+function commentNode(doc, name, text) {
+  const node = doc.createElement('div');
+  node.setAttribute('aria-label', `Bình luận dưới tên ${name} vào 2 ngày trước`);
+  node.innerHTML = `<a role="link"><span>${name}</span></a><div dir="auto">${text}</div>`;
+  return node;
 }
 
 function loadContentScript({ window, doc }) {
   const code = fs.readFileSync('extension/content_script.js', 'utf8');
   const chrome = {
-    runtime: {
-      sendMessage: async () => ({}),
-      onMessage: { addListener: () => {} },
-    },
+    runtime: { sendMessage: async () => ({}), onMessage: { addListener: () => {} } },
   };
-  // Timer tức thì: giữ thứ tự nhưng không tốn thời gian thật.
-  const fastTimeout = (fn) => setTimeout(fn, 0);
-  const noopInterval = () => 0;
-
   return new Function(
     'chrome', 'console', 'document', 'window', 'location', 'getComputedStyle',
     'setTimeout', 'setInterval', 'clearInterval',
     'PointerEvent', 'MouseEvent', 'KeyboardEvent', 'Node', 'URL',
-    code + '\n;return { scrapeComments, findCommentScrollContainer, collectCommentText };'
+    code + '\n;return { scrapeComments, findCommentScrollContainer, readCommentTotal };'
   )(
     chrome, console, doc, window, window.location,
     (el) => window.getComputedStyle(el),
-    fastTimeout, noopInterval, () => {},
+    (fn) => setTimeout(fn, 0), () => 0, () => {},
     window.PointerEvent || window.MouseEvent, window.MouseEvent, window.KeyboardEvent,
     window.Node, URL
   );
+}
+
+// ------------------------------------------------------ UI A: /<page>/videos/
+
+// Panel mở sẵn ở cột phải. FB báo 801 bình luận nhưng chỉ trả 2 lúc đầu và
+// thêm 10 mỗi lần bấm, tối đa 32 rồi hết nút — đúng kiểu FB cắt ngắn.
+function buildVideosUi() {
+  const SERVED = 32;
+  const CLAIMED = 801;
+  const url = 'https://www.facebook.com/61578002396561/videos/1667655332035996';
+
+  const ctx = makeDom(`
+    <div id="page">
+      <div id="video-col"><video></video></div>
+      <div id="rail" style="overflow-y: auto">
+        <div id="cmt-head">
+          <span>Bình luận</span>
+          <div role="button" id="see-all"><span>Xem tất cả</span></div>
+        </div>
+        <div id="list"></div>
+        <div role="button" id="more">
+          <span>Xem thêm bình luận</span><span id="counter">2/${CLAIMED}</span>
+        </div>
+      </div>
+    </div>`, url);
+
+  const { doc, rectAll, scrollable } = ctx;
+  const rail = doc.getElementById('rail');
+  const list = doc.getElementById('list');
+  const state = { loaded: 0, railScrolls: 0, pageScrolls: 0, seeAllClicked: 0, ui: 'videos', served: SERVED, claimed: CLAIMED };
+
+  scrollable(rail, 4000, 600, () => { state.railScrolls++; });
+  rectAll(doc.body);
+
+  const render = (n) => {
+    const upto = Math.min(state.loaded + n, SERVED);
+    for (let i = state.loaded; i < upto; i++) {
+      const node = commentNode(doc, `Người ${i + 1}`, i < INTENT.length ? INTENT[i] : filler(i));
+      list.appendChild(node);
+      rectAll(node);
+    }
+    state.loaded = upto;
+    const more = doc.getElementById('more');
+    if (state.loaded >= SERVED) { if (more) more.remove(); return; }
+    doc.getElementById('counter').textContent = `${state.loaded}/${CLAIMED}`;
+  };
+
+  doc.getElementById('more').addEventListener('mousedown', () => render(10));
+  doc.getElementById('see-all').addEventListener('mousedown', () => { state.seeAllClicked++; });
+  render(2); // trạng thái ban đầu: 2/801
+
+  return { ...ctx, state };
+}
+
+// ---------------------------------------------------------- UI B: /reel/<id>
+
+// Panel đóng. Hai nút comment trên trang (reel hiện tại + reel preload kế bên).
+function buildReelUi(opts = {}) {
+  const { panelOpens = true } = opts;
+  const SERVED = 22;
+  const url = 'https://www.facebook.com/reel/2504266503383241';
+
+  const ctx = makeDom(`
+    <div id="viewer" style="overflow-y: auto">
+      <div id="reel-current">
+        <video></video>
+        <div role="button" id="like-btn" aria-label="Thích"><span>2,9K</span></div>
+        <div role="button" id="cmt-btn" aria-label="Bình luận"><span>22</span></div>
+      </div>
+      <div id="reel-next">
+        <video></video>
+        <div role="button" id="cmt-btn-next" aria-label="Bình luận"><span>9</span></div>
+      </div>
+      <div id="panelwrap"></div>
+    </div>`, url);
+
+  const { doc, rectAll, pinRect, scrollable } = ctx;
+  const viewer = doc.getElementById('viewer');
+  const panelwrap = doc.getElementById('panelwrap');
+  const state = { loaded: 0, panelScrolls: 0, viewerScrolls: 0, sortedByAll: false, wrongReelOpened: false, ui: 'reel', served: SERVED };
+
+  scrollable(viewer, 9000, 700, () => { state.viewerScrolls++; });
+  rectAll(doc.body);
+  // Nút của reel hiện tại nằm giữa màn hình; nút của reel preload ở ngoài màn hình.
+  pinRect(doc.getElementById('cmt-btn'), 500);
+  pinRect(doc.getElementById('cmt-btn-next'), 3000);
+
+  let panel = null, list = null;
+
+  const syncMore = () => {
+    const old = doc.getElementById('more');
+    if (old) old.remove();
+    if (state.loaded >= SERVED) return;
+    const more = doc.createElement('div');
+    more.id = 'more';
+    more.setAttribute('role', 'button');
+    more.innerHTML = `<span>Xem thêm bình luận</span><span>${state.loaded}/${SERVED}</span>`;
+    panel.appendChild(more);
+    rectAll(more);
+    more.addEventListener('mousedown', () => render(8));
+  };
+
+  const render = (n) => {
+    const upto = Math.min(state.loaded + n, SERVED);
+    for (let i = state.loaded; i < upto; i++) {
+      const node = commentNode(doc, `Người ${i + 1}`, i < INTENT.length ? INTENT[i] : filler(i));
+      list.appendChild(node);
+      rectAll(node);
+    }
+    state.loaded = upto;
+    syncMore();
+  };
+
+  const openPanel = () => {
+    if (panel) return;
+    panel = doc.createElement('div');
+    panel.id = 'panel';
+    panel.setAttribute('style', 'overflow-y: auto');
+    panel.innerHTML = `<div role="button" id="sort"><span>Phù hợp nhất</span></div><div id="list"></div>`;
+    panelwrap.appendChild(panel);
+    scrollable(panel, 3000, 600, () => { state.panelScrolls++; });
+    list = doc.getElementById('list');
+    rectAll(panel);
+
+    doc.getElementById('sort').addEventListener('mousedown', () => {
+      if (doc.getElementById('sortmenu')) return;
+      const menu = doc.createElement('div');
+      menu.id = 'sortmenu';
+      menu.innerHTML =
+        `<div role="menuitem" id="opt-all">Tất cả bình luận</div>` +
+        `<div role="menuitem">Phù hợp nhất</div>`;
+      doc.body.appendChild(menu);
+      rectAll(menu);
+      doc.getElementById('opt-all').addEventListener('mousedown', () => {
+        state.sortedByAll = true;
+        menu.remove();
+      });
+    });
+
+    render(6); // trạng thái ban đầu: 6/22
+  };
+
+  if (panelOpens) {
+    doc.getElementById('cmt-btn').addEventListener('mousedown', openPanel);
+  }
+  // Bấm nhầm nút của reel preload = cào comment của reel khác.
+  doc.getElementById('cmt-btn-next').addEventListener('mousedown', () => {
+    state.wrongReelOpened = true;
+    const wrong = doc.createElement('div');
+    wrong.setAttribute('aria-label', 'Bình luận dưới tên Reel Khác vào 1 giờ trước');
+    wrong.innerHTML = `<a role="link"><span>Reel Khác</span></a><div dir="auto">COMMENT-CUA-REEL-KHAC</div>`;
+    doc.getElementById('reel-next').appendChild(wrong);
+    rectAll(wrong);
+  });
+
+  return { ...ctx, state };
 }
 
 // ---------------------------------------------------------------- assertions
 
 const failures = [];
 function check(name, cond, detail) {
-  if (cond) {
-    console.log(`  ✅ ${name}`);
-  } else {
+  if (cond) console.log(`  ✅ ${name}`);
+  else {
     console.log(`  ❌ ${name}${detail ? ' — ' + detail : ''}`);
     failures.push(name);
   }
 }
 
-async function runFullScrape(label, opts) {
+async function run(label, fx, asserts) {
   console.log(`\n=== ${label} ===`);
-  const fx = buildDom(opts);
   const api = loadContentScript(fx);
-
-  const comments = await api.scrapeComments();
-  const joined = comments.join('\n');
-
-  console.log(`\n  → trả về ${comments.length} bình luận, ` +
-    `đã nạp ${fx.state.loaded}/${TOTAL}, ` +
-    `cuộn panel ${fx.state.panelScrolls} lần, cuộn feed ${fx.state.feedScrolls} lần\n`);
-
-  check('mở được panel bình luận', fx.state.loaded > 0);
-  check('chuyển sang "Tất cả bình luận"', fx.state.sortedByAll);
-  check(
-    `bấm "Xem thêm bình luận" cho tới hết (${TOTAL} cái)`,
-    fx.state.loaded === TOTAL,
-    `mới nạp ${fx.state.loaded}`
-  );
-  check(
-    `đọc đủ ${TOTAL} bình luận`,
-    comments.length === TOTAL,
-    `đọc được ${comments.length}`
-  );
-  check(
-    'không cuộn nhầm khung feed (sẽ nhảy sang reel khác)',
-    fx.state.feedScrolls === 0,
-    `đã cuộn feed ${fx.state.feedScrolls} lần`
-  );
-  check(
-    'có cuộn panel bình luận',
-    fx.state.panelScrolls > 0
-  );
-  check(
-    'giữ được nội dung intent',
-    INTENT_TEXTS.every((t) => joined.includes(t)),
-    'thiếu: ' + INTENT_TEXTS.filter((t) => !joined.includes(t)).join(' | ')
-  );
-
-  // findCommentScrollContainer phải trả về panel, không phải khung feed
-  const container = api.findCommentScrollContainer();
-  check(
-    'findCommentScrollContainer() trả về panel chứ không phải feed',
-    container && container.id === 'panel',
-    'trả về: ' + (container ? '#' + container.id : 'null')
-  );
-}
-
-async function runPanelNeverOpens() {
-  console.log('\n=== Kịch bản 3: panel không mở được ===');
-  const fx = buildDom({ panelOpens: false });
-  const api = loadContentScript(fx);
-
-  let threw = null;
-  let comments = null;
-  try {
-    comments = await api.scrapeComments();
-  } catch (e) {
-    threw = e;
-  }
-
-  check('không ném lỗi', !threw, String(threw));
-  check('trả về mảng rỗng (báo thật là không đọc được)',
-    Array.isArray(comments) && comments.length === 0,
-    JSON.stringify(comments));
-  check('không cuộn nhầm khung feed', fx.state.feedScrolls === 0,
-    `đã cuộn feed ${fx.state.feedScrolls} lần`);
+  let comments = null, threw = null;
+  try { comments = await api.scrapeComments(); } catch (e) { threw = e; }
+  check('không ném lỗi', !threw, String(threw && threw.stack));
+  await asserts(comments || [], fx.state, api);
 }
 
 (async () => {
-  console.log('TEST scrapeComments trên DOM Reel giả lập');
+  console.log('TEST scrapeComments trên hai UI bình luận thật của Facebook');
 
-  await runFullScrape('Kịch bản 1: nút có bộ đếm "8/38"', { counter: true });
-  await runFullScrape('Kịch bản 2: nút không có bộ đếm', { counter: false });
-  await runPanelNeverOpens();
+  await run('UI A — /videos/ : panel mở sẵn, FB báo 2/801', buildVideosUi(), (comments, st, api) => {
+    const joined = comments.join('\n');
+    console.log(`\n  → ${comments.length} bình luận | nạp ${st.loaded}/${st.served} ` +
+      `(FB báo ${st.claimed}) | cuộn rail ${st.railScrolls}\n`);
+    // Đọc bộ đếm trên DOM còn nguyên (sau khi cào xong FB đã gỡ nút đi rồi).
+    const fresh = buildVideosUi();
+    check('đọc được tổng số FB công bố từ "2/801"',
+      loadContentScript(fresh).readCommentTotal() === st.claimed,
+      'đọc ra ' + loadContentScript(fresh).readCommentTotal());
+    check('bấm "Xem thêm bình luận" cho tới khi hết nút',
+      st.loaded === st.served, `mới nạp ${st.loaded}`);
+    check(`không dừng ở 2 cái đầu (đọc đủ ${st.served})`,
+      comments.length === st.served, `đọc được ${comments.length}`);
+    check('dừng lại khi FB không trả thêm, không quay vô hạn', true);
+    check('có cuộn panel', st.railScrolls > 0);
+    check('giữ được nội dung intent',
+      INTENT.every((t) => joined.includes(t)),
+      'thiếu: ' + INTENT.filter((t) => !joined.includes(t)).join(' | '));
+    check('scope đúng cột bình luận',
+      api.findCommentScrollContainer() && api.findCommentScrollContainer().id === 'rail');
+  });
+
+  await run('UI B — /reel/ : phải bấm nút comment (22) để mở panel', buildReelUi(), (comments, st, api) => {
+    const joined = comments.join('\n');
+    console.log(`\n  → ${comments.length} bình luận | nạp ${st.loaded}/${st.served} | ` +
+      `cuộn panel ${st.panelScrolls} | cuộn feed ${st.viewerScrolls}\n`);
+    check('mở được panel bằng nút comment', st.loaded > 0);
+    check('không bấm nhầm nút comment của reel preload', !st.wrongReelOpened);
+    check('không dính comment của reel khác', !joined.includes('COMMENT-CUA-REEL-KHAC'));
+    check('chuyển sang "Tất cả bình luận"', st.sortedByAll);
+    check(`bấm "Xem thêm bình luận" cho tới hết (${st.served})`,
+      st.loaded === st.served, `mới nạp ${st.loaded}`);
+    check(`đọc đủ ${st.served} bình luận`, comments.length === st.served,
+      `đọc được ${comments.length}`);
+    check('KHÔNG cuộn khung feed (sẽ nhảy sang reel khác)',
+      st.viewerScrolls === 0, `đã cuộn ${st.viewerScrolls} lần`);
+    check('có cuộn panel bình luận', st.panelScrolls > 0);
+    check('giữ được nội dung intent',
+      INTENT.every((t) => joined.includes(t)),
+      'thiếu: ' + INTENT.filter((t) => !joined.includes(t)).join(' | '));
+    check('scope đúng panel', api.findCommentScrollContainer() &&
+      api.findCommentScrollContainer().id === 'panel');
+  });
+
+  await run('UI B — panel không mở được', buildReelUi({ panelOpens: false }), (comments, st) => {
+    check('trả về rỗng (báo thật là không đọc được)', comments.length === 0,
+      JSON.stringify(comments));
+    check('KHÔNG mở panel của reel preload để cào bừa', !st.wrongReelOpened);
+    check('không cuộn khung feed', st.viewerScrolls === 0, `đã cuộn ${st.viewerScrolls} lần`);
+  });
 
   console.log('');
   if (failures.length) {

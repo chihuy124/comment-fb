@@ -25,17 +25,25 @@ không thấy:
 
 ## scrape-comments.js — cào bình luận
 
-Chạy `scrapeComments()` thật trên DOM jsdom dựng đúng theo cấu trúc Reel thật
-(đã xác minh từ dump của user): nút `aria-label="Bình luận"` nằm ngoài panel
-trong khung feed cuộn được, node bình luận `aria-label="Bình luận dưới tên X
-vào N giờ trước"`, nút `Xem thêm bình luận 8/38` nạp thêm từng đợt 8 cái.
+Chạy `scrapeComments()` thật trên DOM jsdom dựng theo **hai UI bình luận thật**
+của Facebook (theo ảnh chụp màn hình của user):
+
+| UI | URL | Panel | Nút tải thêm |
+|---|---|---|---|
+| A | `/<page>/videos/<id>` | mở sẵn ở cột phải | `Xem thêm bình luận` + `2/801` |
+| B | `/reel/<id>` | đóng — phải bấm nút comment (số `22`) dưới nút like | `Xem thêm bình luận` + `6/22` |
+
+UI A còn kiểm tra chuyện tổng FB công bố (801) lớn hơn nhiều số nó chịu trả:
+phải dừng đúng lúc chứ không quay vô hạn. UI B có **hai** nút comment trên
+trang (reel hiện tại + reel preload kế bên) — bấm nhầm cái ngoài màn hình là
+cào comment của reel khác.
 
 Fixture **chỉ nghe `mousedown`**, đúng như React của FB — `el.click()` trần
 không kích hoạt gì cả.
 
-Ba kịch bản: nút có bộ đếm `8/38`, nút không có bộ đếm, và panel không mở được.
+Ba kịch bản: UI A, UI B, và UI B khi panel không mở được.
 
-Bốn bug bị bắt ở lần chạy đầu — đều là lý do reel 38 bình luận báo về `0`:
+Năm bug bị bắt — bốn cái đầu là lý do reel 38 bình luận báo về `0`:
 - `findCommentScrollContainer()` neo vào `[aria-label^="Bình luận"]` nên trúng
   luôn cái NÚT mở panel → leo lên ra khung feed → cuộn feed 8 lần (ngoài đời =
   nhảy sang reel khác giữa chừng) và scope collect sai nhánh
@@ -44,3 +52,7 @@ Bốn bug bị bắt ở lần chạy đầu — đều là lý do reel 38 bình
 - vòng lặp 8 vòng cố định, không lặp cho tới khi hết bình luận
 - `switchToAllComments()` cũng `.click()` trần → không bao giờ chuyển sang
   "Tất cả bình luận", và im lặng khi thất bại
+- khi panel của reel hiện tại không mở, `openCommentPanel()` bấm tiếp sang nút
+  comment của reel preload → cào comment của REEL KHÁC rồi gán cho reel này
+  (reel rác bị chấm là chất lượng). Giờ chỉ bấm nút đang hiển thị trên màn hình,
+  không mở được thì báo rỗng để hunter bỏ qua

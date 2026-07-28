@@ -522,11 +522,15 @@ async function scrapeComments() {
   // Only scroll the comment panel itself. NEVER scroll the window in scrape
   // mode — that advances the vertical Reel feed and mixes comments from
   // adjacent reels into the DOM.
-  const panel = findCommentScrollContainer();
+  let panel = findCommentScrollContainer();
 
   // Bấm "Xem thêm bình luận" CHO TỚI KHI HẾT, không phải 8 vòng cố định.
   // Dừng khi: đạt tổng số FB công bố ("16/38"), hoặc 3 vòng liên tiếp không
   // nạp thêm được node nào, hoặc chạm trần vòng lặp.
+  //
+  // Lưu ý: tổng FB công bố có thể lớn hơn nhiều so với những gì nó chịu trả
+  // (bài /videos/ ghi "2/801"). Không nạp hết là chuyện bình thường — dừng theo
+  // 'idle' và ghi log rõ, chứ không quay vòng vô ích.
   const MAX_ROUNDS = 40;
   const total = readCommentTotal(panel);
   let loaded = countCommentNodes(panel);
@@ -536,6 +540,10 @@ async function scrapeComments() {
 
   for (; rounds < MAX_ROUNDS && idle < 3; rounds++) {
     if (total && loaded >= total) break;
+    // Tìm lại container mỗi vòng: đổi sang "Tất cả bình luận" hoặc mở rộng
+    // danh sách làm React thay cả nhánh DOM, giữ tham chiếu cũ là cuộn vào
+    // một node đã bị gỡ khỏi trang.
+    panel = findCommentScrollContainer() || panel;
     if (panel) panel.scrollTop = panel.scrollHeight;
     await sleep(900);
     const clicked = await clickMoreCommentsButtons(panel);
@@ -687,12 +695,20 @@ async function openCommentPanel() {
   // panel — prefer the button actually on screen, nearest the viewport centre.
   const centre = window.innerHeight / 2;
   targets.sort((a, b) => visibleScore(a.el, centre) - visibleScore(b.el, centre));
+
+  // Chỉ bấm nút ĐANG HIỂN THỊ trên màn hình. Nút ngoài màn hình là của reel
+  // preload — bấm vào đó sẽ mở panel của REEL KHÁC, và ta gán nhầm comment của
+  // nó cho reel hiện tại (reel rác bị chấm là chất lượng, và ngược lại).
+  // Thà báo "không mở được panel" để hunter bỏ qua reel này còn hơn.
+  const onScreen = targets.filter(({ el }) => visibleScore(el, centre) < 1e6);
+  const dropped = targets.length - onScreen.length;
   console.log(
     '[FB Seeding CS] found', targets.length, 'candidate comment buttons;',
-    'trying', targets.map((t) => t.label).slice(0, 4).join(' / ')
+    dropped ? `bỏ ${dropped} nút ngoài màn hình (reel preload);` : '',
+    'trying', onScreen.map((t) => t.label).slice(0, 4).join(' / ') || '(không có nút nào trên màn hình)'
   );
 
-  for (const { el, label } of targets) {
+  for (const { el, label } of onScreen) {
     // React handlers might sit on the element itself, its parent, or even
     // higher — dispatch full mouse sequence on the element and its ancestors.
     let node = el;
