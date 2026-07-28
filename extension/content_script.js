@@ -319,13 +319,45 @@ function sweepReelUrls() {
 // Câu chữ Facebook dùng khi chặn thao tác. Chỉ quét trong hộp thoại / vùng
 // aria-live, KHÔNG quét cả trang: "thử lại sau" hoàn toàn có thể nằm trong bình
 // luận của người khác và sẽ thành báo động giả.
+// Nguyên văn hộp thoại thật của Facebook (ảnh chụp từ máy user):
+//   "Giờ bạn chưa dùng được tính năng này"
+//   "Để bảo vệ cộng đồng khỏi spam, chúng tôi giới hạn tần suất bạn đăng bài,
+//    bình luận hoặc làm các việc khác trong khoảng thời gian nhất định."
 const BLOCK_PHRASES = [
-  'thao tác quá nhanh', 'tạm thời bị chặn', 'tạm thời chặn',
-  'bị chặn khỏi', 'chặn khỏi việc', 'chúng tôi đã hạn chế',
-  'bạn không thể sử dụng tính năng này', 'vui lòng thử lại sau',
-  'temporarily blocked', 'action blocked', 'you can’t use this feature',
-  "you can't use this feature", 'try again later', 'too quickly',
+  'chưa dùng được tính năng này', 'giới hạn tần suất',
+  'bảo vệ cộng đồng khỏi spam', 'thao tác quá nhanh',
+  'tạm thời bị chặn', 'tạm thời chặn', 'bị chặn khỏi', 'chặn khỏi việc',
+  'chúng tôi đã hạn chế', 'bạn không thể sử dụng tính năng này',
+  'vui lòng thử lại sau',
+  "you can't use this feature", 'you can’t use this feature',
+  'protect our community from spam', 'we limit how often',
+  'temporarily blocked', 'action blocked', 'try again later', 'too quickly',
 ];
+
+// Facebook KHÔNG gỡ bình luận bị chặn khỏi DOM — nó để nguyên bong bóng bình luận
+// và gắn dòng lỗi bên cạnh: "Không thể đăng bình luận của bạn. Thử lại".
+// Vì node vẫn còn đó, cách xác minh "thấy bình luận là xong" báo thành công sai.
+const FAILED_COMMENT_PHRASES = [
+  'không thể đăng bình luận', 'không đăng được bình luận',
+  'không thể đăng được bình luận',
+  "comment couldn't be posted", 'comment could not be posted',
+  'unable to post your comment', "couldn't post your comment",
+];
+
+// Dòng lỗi nằm CẠNH bong bóng bình luận chứ không nằm trong nó, nên phải soi lên
+// vài cấp — nhưng dừng ngay khi cấp đó đã bao nhiều bình luận, nếu không một
+// bình luận lỗi của lượt trước sẽ làm cả danh sách bị coi là lỗi.
+function commentFailureMarker(el) {
+  let node = el;
+  for (let up = 0; up < 4 && node; up++) {
+    if (up > 0 && node.querySelectorAll(COMMENT_NODE_SEL).length > 1) break;
+    const t = normalizeForMatch(node.innerText);
+    const hit = FAILED_COMMENT_PHRASES.find((p) => t.includes(p));
+    if (hit) return hit;
+    node = node.parentElement;
+  }
+  return null;
+}
 
 function detectBlockDialog() {
   const scopes = document.querySelectorAll(
@@ -377,6 +409,9 @@ function findOwnComment(needle, posterName) {
       nearMiss = { author, body: body.slice(0, 60) };
       continue;
     }
+    // Bong bóng bình luận có mặt NHƯNG Facebook gắn dòng lỗi → chưa đăng được.
+    const failure = commentFailureMarker(el);
+    if (failure) return { found: true, author, failed: true, marker: failure };
     return { found: true, author };
   }
   return { found: false, nearMiss };
@@ -395,9 +430,18 @@ async function verifyCommentAppeared(text, posterName, opts = {}) {
 
   while (Date.now() < deadline) {
     last = findOwnComment(needle, posterName);
+    // Đã có dấu lỗi thì không cần chờ thêm — Facebook đã từ chối rồi.
+    if (last.found && last.failed) {
+      console.warn('[FB Seeding CS] Facebook gắn lỗi lên bình luận:', last.marker);
+      return { verified: false, failedMarker: last.marker };
+    }
     if (last.found) {
       await sleep(persistMs);
       const again = findOwnComment(needle, posterName);
+      if (again.found && again.failed) {
+        console.warn('[FB Seeding CS] Facebook gắn lỗi lên bình luận:', again.marker);
+        return { verified: false, failedMarker: again.marker };
+      }
       if (again.found) return { verified: true, author: again.author };
       console.warn('[FB Seeding CS] bình luận xuất hiện rồi biến mất — Facebook đã rút lại');
       return { verified: false, vanished: true };
@@ -539,6 +583,18 @@ async function postComment(text, expectedReelId, opts = {}) {
     return {
       ok: false, error: 'blocked', blockText: blocked.text, typed,
       hint: `Facebook đang chặn thao tác: "${blocked.text}". Nghỉ một lúc rồi hãy chạy lại.`,
+    };
+  }
+
+  // Bình luận nằm đó nhưng bị gắn "Không thể đăng bình luận của bạn" — Facebook
+  // đã chặn, chỉ là không mở hộp thoại (hoặc hộp thoại đã bị đóng). Coi như bị
+  // chặn để cả loạt dừng ngay, chứ không phải một lỗi kỹ thuật lẻ.
+  if (v.failedMarker) {
+    return {
+      ok: false, error: 'blocked', typed,
+      blockText: 'Facebook gắn lỗi ngay trên bình luận: "Không thể đăng bình luận của bạn"',
+      failedMarker: v.failedMarker,
+      hint: 'Bình luận bị Facebook từ chối (chặn vì nghi spam). Nghỉ một lúc rồi hãy chạy lại.',
     };
   }
 

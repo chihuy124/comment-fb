@@ -65,16 +65,30 @@ Giờ bằng chứng là: bình luận **xuất hiện** trong danh sách, **đ�
 đăng** (đọc từ `aria-label` của ô soạn thảo), **đúng nội dung**, và **vẫn còn**
 sau vài giây — Facebook chèn lạc quan rồi rút lại nếu server từ chối.
 
-Bảy kịch bản, mỗi cái ra một mã lỗi khác nhau:
+Mười kịch bản, mỗi cái ra một mã lỗi khác nhau:
 
 | Facebook làm gì | Kết quả |
 |---|---|
 | nhận bình luận | `ok: true, verified: true` |
 | xoá ô, không chèn gì (rate limit âm thầm) | `not_visible` |
 | chèn rồi rút lại | `comment_vanished` |
-| hiện hộp thoại chặn | `blocked` + nguyên văn Facebook nói gì |
+| hiện hộp thoại chặn spam | `blocked` + nguyên văn Facebook nói gì |
+| **để nguyên bình luận + gắn "Không thể đăng bình luận của bạn"** | `blocked` |
+| dòng lỗi còn, hộp thoại đã bị đóng | `blocked` |
+| có bình luận lỗi **cũ** trong danh sách, lượt này thành công | `ok: true` — không làm oan |
 | có bình luận cùng nội dung của người khác | `not_visible` + `nearMiss` |
 | không xoá ô | `submit_failed` |
+
+Hộp thoại chặn dùng **nguyên văn thật** chép từ ảnh chụp trên máy user:
+*"Giờ bạn chưa dùng được tính năng này — Để bảo vệ cộng đồng khỏi spam, chúng tôi
+giới hạn tần suất bạn đăng bài, bình luận..."*
+
+Hàng in đậm là ca đã làm bản trước báo `posted` sai: Facebook **không gỡ** bình
+luận bị chặn khỏi DOM, nó để nguyên bong bóng và gắn dấu đỏ bên cạnh — nên cách
+xác minh "thấy bình luận là xong" chờ 3 giây vẫn thấy và kết luận thành công.
+Dòng lỗi nằm **cạnh** bong bóng chứ không nằm trong, nên phải soi lên vài cấp
+nhưng dừng ngay khi cấp đó đã bao nhiều bình luận — nếu không, một bình luận lỗi
+của lượt trước sẽ làm cả danh sách bị coi là lỗi.
 
 Kèm hai bẫy báo động giả: chữ "thử lại sau" nằm trong **bình luận của người
 khác** không được tính là bị chặn (nên chỉ quét trong `role="dialog"` /

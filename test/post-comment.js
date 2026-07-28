@@ -86,18 +86,44 @@ function buildDom(behaviour) {
 
     addComment('Nguyễn An', 'phim hay quá');
     addComment('Trần Bình', 'cho xin link với, thử lại sau nhé'); // bẫy báo động giả
+    if (behaviour === 'accept-after-old-failure') {
+      addFailedComment(POSTER, 'Bình luận cũ của lượt trước đã bị Facebook từ chối');
+    }
   };
   const panelwrapAppend = () => doc.getElementById('panelwrap').appendChild(panel);
 
   doc.getElementById('cmt-btn').addEventListener('mousedown', openPanel);
 
+  // NGUYÊN VĂN hộp thoại thật, chép từ ảnh chụp trên máy user.
   const showBlockDialog = () => {
     const d = doc.createElement('div');
     d.setAttribute('role', 'dialog');
-    d.innerHTML = '<span>Bạn đang thao tác quá nhanh</span>' +
-      '<span>Vui lòng thử lại sau. Chúng tôi đã hạn chế tính năng này để giữ an toàn cho cộng đồng.</span>';
+    d.innerHTML =
+      '<span>Giờ bạn chưa dùng được tính năng này</span>' +
+      '<span>Để bảo vệ cộng đồng khỏi spam, chúng tôi giới hạn tần suất bạn đăng bài, ' +
+      'bình luận hoặc làm các việc khác trong khoảng thời gian nhất định. ' +
+      'Bạn có thể thử lại sau.</span>' +
+      '<div role="button"><span>OK</span></div>';
     doc.body.appendChild(d);
     rectAll(d);
+  };
+
+  // Facebook để nguyên bong bóng bình luận và gắn dòng lỗi BÊN CẠNH nó.
+  const addFailedComment = (author, text) => {
+    const row = doc.createElement('div');
+    const bubble = doc.createElement('div');
+    bubble.setAttribute('aria-label', `Bình luận dưới tên ${author} vào 1 phút trước`);
+    bubble.innerHTML = `<a role="link"><span>${author}</span></a><div dir="auto">${text}</div>`;
+    row.appendChild(bubble);
+    const err = doc.createElement('div');
+    err.innerHTML = '<span>Không thể đăng bình luận của bạn.</span>' +
+      '<div role="button"><span>Thử lại</span></div>' +
+      '<div role="button"><span>Chỉnh sửa</span></div>' +
+      '<div role="button"><span>Báo cáo lỗi</span></div>';
+    row.appendChild(err);
+    list.appendChild(row);
+    rectAll(row);
+    return row;
   };
 
   // Enter = gửi, đúng như Facebook
@@ -129,6 +155,14 @@ function buildDom(behaviour) {
       return;
     }
     if (behaviour === 'blocked') { showBlockDialog(); return; }
+    // Chặn kiểu thật hay gặp nhất: bong bóng bình luận VẪN NẰM ĐÓ kèm dòng lỗi,
+    // cộng hộp thoại. Đây là ca đã làm bản cũ báo thành công sai.
+    if (behaviour === 'failed-inline') { addFailedComment(POSTER, text); showBlockDialog(); return; }
+    // Y như trên nhưng user đã bấm OK đóng hộp thoại → chỉ còn dòng lỗi.
+    if (behaviour === 'failed-inline-no-dialog') { addFailedComment(POSTER, text); return; }
+    // Lượt trước có một bình luận lỗi nằm sẵn trong danh sách, lượt này thành
+    // công — không được để cái lỗi cũ làm cái mới bị coi là lỗi.
+    if (behaviour === 'accept-after-old-failure') { state.inserted = addComment(POSTER, text); return; }
     // 'silent-drop': không làm gì cả
   });
 
@@ -206,12 +240,34 @@ async function run(label, behaviour, asserts) {
     check('lý do là bình luận bị rút lại', res.error === 'comment_vanished', res.error);
   });
 
-  await run('Facebook hiện hộp thoại chặn', 'blocked', (res) => {
+  await run('Hộp thoại chặn spam (nguyên văn thật)', 'blocked', (res) => {
     check('KHÔNG báo thành công', res.ok === false, JSON.stringify(res));
     check('phân biệt được là BỊ CHẶN, không phải lỗi kỹ thuật', res.error === 'blocked', res.error);
     check('kèm nguyên văn Facebook nói gì',
-      /thao tác quá nhanh/i.test(res.blockText || ''), res.blockText);
+      /chưa dùng được tính năng này/i.test(res.blockText || ''), res.blockText);
+    check('nhận ra lý do là giới hạn tần suất chống spam',
+      /giới hạn tần suất|spam/i.test(res.blockText || ''), res.blockText);
   });
+
+  // Đây chính là ca đã làm bản cũ báo "posted" sai: bong bóng bình luận VẪN NẰM
+  // trong DOM kèm dấu đỏ "Không thể đăng bình luận của bạn", nên cách xác minh
+  // "thấy bình luận là xong" chờ 3 giây vẫn thấy và kết luận thành công.
+  await run('Bình luận nằm đó nhưng bị gắn "Không thể đăng bình luận"', 'failed-inline', (res) => {
+    check('KHÔNG báo thành công', res.ok === false, JSON.stringify(res));
+    check('quy về BỊ CHẶN để cả loạt dừng ngay', res.error === 'blocked', res.error);
+  });
+
+  await run('Dòng lỗi còn, hộp thoại đã bị đóng', 'failed-inline-no-dialog', (res) => {
+    check('vẫn phát hiện được, không cần hộp thoại', res.error === 'blocked', res.error);
+    check('nói rõ dấu lỗi bắt được từ đâu',
+      /không thể đăng bình luận/i.test(res.failedMarker || ''), res.failedMarker);
+  });
+
+  await run('Có bình luận lỗi CŨ trong danh sách, lượt này thành công',
+    'accept-after-old-failure', (res) => {
+      check('không để lỗi cũ làm oan bình luận mới', res.ok === true, JSON.stringify(res));
+      check('có cờ verified', res.verified === true);
+    });
 
   await run('Bình luận cùng nội dung nhưng của người khác', 'other-author', (res) => {
     check('KHÔNG nhận vơ bình luận của người khác', res.ok === false, JSON.stringify(res));

@@ -638,7 +638,7 @@ document.addEventListener('DOMContentLoaded', () => {
         timeout: 'Quá thời gian chờ. Tab đang mở để bạn kiểm tra.',
         tab_create_failed: 'Không mở được tab Facebook.',
         empty_text: 'Comment đang trống — hãy tạo nội dung trước.',
-        blocked: 'Facebook đang chặn thao tác. Nghỉ một lúc rồi hãy chạy lại.',
+        blocked: 'Facebook CHẶN vì nghi spam (giới hạn tần suất). Nghỉ một lúc rồi hãy chạy lại.',
         not_visible: 'Đã gửi nhưng bình luận KHÔNG xuất hiện — Facebook có thể đã bỏ âm thầm. Tab đang mở để bạn kiểm tra.',
         comment_vanished: 'Bình luận hiện ra rồi bị Facebook rút lại — coi như chưa đăng.',
     };
@@ -875,10 +875,11 @@ document.addEventListener('DOMContentLoaded', () => {
             if (res?.error === 'blocked') {
                 const detail = res.blockText ? ` Facebook nói: "${escapeHtml(res.blockText)}".` : '';
                 setBulkStatus(
-                    `<span style="color:var(--accent-red);">Đã dừng vì Facebook đang chặn thao tác.${detail}` +
-                    ` Đã đăng ${posted}, lỗi ${failed}. Nghỉ 30-60 phút rồi hãy chạy lại.</span>`
+                    `<span style="color:var(--accent-red);">🛑 ĐÃ DỪNG — Facebook chặn vì nghi spam.${detail}` +
+                    ` Đã đăng ${posted}, lỗi ${failed}. Nghỉ 30-60 phút rồi hãy chạy lại,` +
+                    ` và giãn delay giữa các comment ra.</span>`
                 );
-                showToast('Dừng vì Facebook đang chặn thao tác. Nghỉ một lúc rồi chạy lại.', 'warning');
+                showToast('Facebook chặn vì nghi spam — đã dừng toàn bộ. Nghỉ 30-60 phút rồi chạy lại.', 'warning');
                 setBulkRunning(false);
                 return;
             }
