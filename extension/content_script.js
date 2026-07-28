@@ -139,10 +139,18 @@ async function harvestMode(durationMs, excludeList, want) {
       }
     } else {
       noProgressRounds = 0;
-      if (gainedUrls) {
-        chrome.runtime.sendMessage({ type: 'DISCOVER_PROGRESS', count: newCount() });
-      }
     }
+
+    // Gửi MỖI VÒNG, kèm cả danh sách URL — không chỉ khi có url mới. Đây là bản
+    // sao lưu duy nhất nếu background hết hạn trước khi harvest kịp kết thúc;
+    // trước đây trường hợp đó vứt sạch mọi thứ đã tìm được.
+    try {
+      chrome.runtime.sendMessage({
+        type: 'DISCOVER_PROGRESS',
+        count: newCount(),
+        urls: Array.from(found),
+      });
+    } catch (e) { /* service worker đang ngủ — vòng sau gửi lại */ }
   }
 
   const urls = Array.from(found);

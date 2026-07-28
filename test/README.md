@@ -23,6 +23,23 @@ không thấy:
 - `tabId = tabId` (do sed thay `tab.id` quá tay) → hunt thoát ngay lập tức
 - `reloads is not defined` (đổi tên biến sót một chỗ) → crash ở lượt harvest đầu
 
+## harvest-salvage.js / hunt-no-progress.js — thu thập URL
+
+Chạy `runHarvest` và `huntReels` thật với **đồng hồ nén** (1 giây thật = vài ms
+trong test), nên mô phỏng được hạn 125 giây mà không phải chờ 125 giây.
+
+Ba bug bị bắt, đều lấy thẳng từ log thật khi hunt không ra một video nào:
+- hết hạn thì trả rỗng → cả vòng harvest tìm được 5-6 reel bị ghi là
+  `+0 new urls (saw 0)`. Giờ `DISCOVER_PROGRESS` mang theo danh sách URL và
+  background giữ lại khi hết hạn
+- hạn đếm từ lúc điều hướng, nhưng tab nền tải Facebook mất 20-30s mới chạy
+  được content script → hết giờ trước khi nó kịp làm gì. Giờ `GET_MISSION`
+  khởi động lại đồng hồ
+- chỉ `harvest.stuck` mới cộng `dryRounds`, nên nguồn trả 0 url mà không tự
+  nhận stuck sẽ reset về 0; `checked` không tăng nên `maxChecks` không bao giờ
+  chạm tới → **quay vô hạn**. Chạy test trên code cũ: tới vòng 12345 vẫn chưa
+  dừng
+
 ## scrape-comments.js — cào bình luận
 
 Chạy `scrapeComments()` thật trên DOM jsdom dựng theo **hai UI bình luận thật**

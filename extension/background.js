@@ -97,6 +97,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Content script asking what to do
   if (msg?.type === 'GET_MISSION' && sender.tab?.id != null) {
     const m = missions.get(sender.tab.id);
+    // Content script vừa vào việc → bắt đầu đếm hạn từ đây, không tính thời
+    // gian Facebook tải trang (tab nền có khi mất 20-30s).
+    if (m?.mode === 'harvest') {
+      const p = pendingHarvests.get(sender.tab.id);
+      if (p?.rearm) p.rearm();
+    }
     sendResponse(m || { mode: null });
     return false;
   }
@@ -161,10 +167,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false;
   }
 
-  // Heartbeat from content script — keeps SW alive, logged for debug
+  // Heartbeat from content script — keeps SW alive, logged for debug.
+  // Cũng là bản sao lưu: nếu harvest hết hạn trước khi content script kịp gửi
+  // HARVEST_RESULT, số URL kèm theo đây là thứ duy nhất cứu được.
   if (msg?.type === 'DISCOVER_PROGRESS') {
     if (sender.tab?.id) {
-      console.log(`[BG] progress tab=${sender.tab.id} count=${msg.count} phase=${msg.phase || '-'}`);
+      const p = pendingHarvests.get(sender.tab.id);
+      if (p && Array.isArray(msg.urls) && msg.urls.length >= (p.partial?.length || 0)) {
+        p.partial = msg.urls;
+      }
+      console.log(
+        `[BG] progress tab=${sender.tab.id} count=${msg.count} phase=${msg.phase || '-'}` +
+        (p ? ` (giữ ${p.partial.length} url)` : '')
+      );
     }
     return false;
   }
@@ -427,8 +442,12 @@ async function huntReels(opts, appTabId) {
         pushFrontier(harvest.urls);
         const added = frontier.length - sizeBefore;
 
-        // Only a source that stayed stuck through the whole ladder counts against us
-        dryRounds = harvest.stuck ? dryRounds + 1 : 0;
+        // Một nguồn không đẩy được reel mới nào vào frontier cũng tính là cạn —
+        // kể cả khi nó không tự nhận là stuck. Trước đây chỉ đếm `stuck`, nên
+        // một nguồn liên tục hết hạn với 0 url (stuck=false) reset dryRounds về
+        // 0 và vòng lặp quay mãi: `checked` không tăng nên maxChecks không bao
+        // giờ chạm tới. Đúng cái thấy trong log: 3 vòng "+0 new urls dryRounds=0".
+        dryRounds = (harvest.stuck || added === 0) ? dryRounds + 1 : 0;
         console.log(
           `[BG][hunt] +${added} new urls (saw ${harvest.urls.length}), frontier=${frontier.length}` +
           `${recovery ? `, ${recovery} recovery attempt(s)` : ''}` +
@@ -610,9 +629,10 @@ async function discoverFromFeed(totalBudgetMs, startUrl, keywords) {
 function runHarvest(tabId, timeoutMs, opts, navigateFn, label) {
   return new Promise(async (resolve) => {
     const empty = { urls: [], stuck: false };
+    const durationMs = opts.durationMs || HARVEST_MS_PER_SOURCE;
     missions.set(tabId, {
       mode: 'harvest',
-      durationMs: opts.durationMs || HARVEST_MS_PER_SOURCE,
+      durationMs,
       exclude: opts.exclude || [],
       want: opts.want || 0,
     });
@@ -622,15 +642,47 @@ function runHarvest(tabId, timeoutMs, opts, navigateFn, label) {
       resolve(empty);
       return;
     }
-    const timer = setTimeout(() => {
+
+    // `partial` giữ những URL content script đã báo qua DISCOVER_PROGRESS.
+    // Trước đây timeout trả về rỗng, nên cả một vòng harvest tìm được 5-6 reel
+    // vẫn bị ghi là "+0 new urls (saw 0)" — vứt sạch công đã làm.
+    const entry = { partial: [], timer: null, resolve: null, armed: false };
+
+    const fire = (payload, why) => {
+      clearTimeout(entry.timer);
       pendingHarvests.delete(tabId);
-      console.warn('[BG] harvest timeout on', label);
-      resolve(empty);
-    }, timeoutMs);
-    pendingHarvests.set(tabId, {
-      resolve: (payload) => { clearTimeout(timer); resolve(payload || empty); },
-      timer,
-    });
+      resolve(payload || empty);
+      if (why) console.log('[BG] harvest', why, 'on', label);
+    };
+
+    const arm = (ms) => {
+      clearTimeout(entry.timer);
+      entry.timer = setTimeout(() => {
+        const salvaged = entry.partial || [];
+        console.warn(
+          '[BG] harvest timeout on', label,
+          salvaged.length ? `— giữ lại ${salvaged.length} url đã tìm được` : '— không có url nào'
+        );
+        // stuck=false: trang vẫn đang chạy, chỉ là chậm hơn hạn. Đánh dấu stuck
+        // ở đây sẽ kích hoạt nhầm thang leo renavigate/fresh-tab.
+        fire({ urls: salvaged, stuck: false });
+      }, ms);
+    };
+
+    // Đồng hồ chạy từ lúc NAVIGATE, nhưng tab nền tải Facebook có khi mất 20-30s
+    // mới chạy được content script — hết cả hạn trước khi nó kịp làm gì.
+    // `rearm` được gọi lại khi content script hỏi GET_MISSION, tức là từ lúc nó
+    // thực sự bắt đầu đếm giờ của chính nó.
+    entry.rearm = () => {
+      if (entry.armed) return; // chỉ gia hạn một lần cho mỗi lần điều hướng
+      entry.armed = true;
+      console.log('[BG] content script vào việc trên', label, `→ gia hạn ${durationMs + 25000}ms`);
+      arm(durationMs + 25000);
+    };
+    entry.resolve = (payload) => fire(payload);
+
+    arm(timeoutMs);
+    pendingHarvests.set(tabId, entry);
   });
 }
 
