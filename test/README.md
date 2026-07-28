@@ -51,6 +51,37 @@ nhau đều được phân biệt rõ:
 - `có-node-bình-luận-nhưng-bóc-ra-rỗng` (kèm số node thật có trong DOM)
 - content script không trả lời (hết hạn / tab chết) — không có `diag` nào
 
+## post-comment.js — xác minh comment đã đăng thật
+
+Bug user gặp: chạy "Comment Tất Cả", vài bài **cuối** báo thành công nhưng trên
+Facebook không có bình luận nào, và không có lỗi nào được báo.
+
+Nguyên nhân: bằng chứng thành công duy nhất là *"ô soạn thảo trở nên trống"* —
+mà Lexical xoá ô ngay khi nhấn Enter, **trước** khi biết server có nhận hay
+không. Bị rate limit thì ô vẫn trống y như lúc thành công. Hỏng dồn về cuối một
+loạt chính là dáng điệu của rate limit.
+
+Giờ bằng chứng là: bình luận **xuất hiện** trong danh sách, **đúng tên người
+đăng** (đọc từ `aria-label` của ô soạn thảo), **đúng nội dung**, và **vẫn còn**
+sau vài giây — Facebook chèn lạc quan rồi rút lại nếu server từ chối.
+
+Bảy kịch bản, mỗi cái ra một mã lỗi khác nhau:
+
+| Facebook làm gì | Kết quả |
+|---|---|
+| nhận bình luận | `ok: true, verified: true` |
+| xoá ô, không chèn gì (rate limit âm thầm) | `not_visible` |
+| chèn rồi rút lại | `comment_vanished` |
+| hiện hộp thoại chặn | `blocked` + nguyên văn Facebook nói gì |
+| có bình luận cùng nội dung của người khác | `not_visible` + `nearMiss` |
+| không xoá ô | `submit_failed` |
+
+Kèm hai bẫy báo động giả: chữ "thử lại sau" nằm trong **bình luận của người
+khác** không được tính là bị chặn (nên chỉ quét trong `role="dialog"` /
+`aria-live`), và bình luận trùng nội dung của người khác không được nhận vơ.
+
+`blocked` làm app **dừng ngay** thay vì cố thêm 2 bài cho đủ 3 lần thất bại.
+
 ## scrape-comments.js — cào bình luận
 
 Chạy `scrapeComments()` thật trên DOM jsdom dựng theo **hai UI bình luận thật**

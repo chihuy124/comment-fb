@@ -638,6 +638,9 @@ document.addEventListener('DOMContentLoaded', () => {
         timeout: 'Quá thời gian chờ. Tab đang mở để bạn kiểm tra.',
         tab_create_failed: 'Không mở được tab Facebook.',
         empty_text: 'Comment đang trống — hãy tạo nội dung trước.',
+        blocked: 'Facebook đang chặn thao tác. Nghỉ một lúc rồi hãy chạy lại.',
+        not_visible: 'Đã gửi nhưng bình luận KHÔNG xuất hiện — Facebook có thể đã bỏ âm thầm. Tab đang mở để bạn kiểm tra.',
+        comment_vanished: 'Bình luận hiện ra rồi bị Facebook rút lại — coi như chưa đăng.',
     };
 
     // Sends one comment request to the extension and resolves with its result.
@@ -866,6 +869,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 showToast(`${pos} chưa đăng được: ${why}`, 'warning');
             }
             renderAll();
+
+            // Facebook nói thẳng là đang chặn thì dừng NGAY, không cố thêm 2 bài
+            // nữa cho đủ 3 lần thất bại — mỗi lần cố thêm chỉ làm bị chặn nặng hơn.
+            if (res?.error === 'blocked') {
+                const detail = res.blockText ? ` Facebook nói: "${escapeHtml(res.blockText)}".` : '';
+                setBulkStatus(
+                    `<span style="color:var(--accent-red);">Đã dừng vì Facebook đang chặn thao tác.${detail}` +
+                    ` Đã đăng ${posted}, lỗi ${failed}. Nghỉ 30-60 phút rồi hãy chạy lại.</span>`
+                );
+                showToast('Dừng vì Facebook đang chặn thao tác. Nghỉ một lúc rồi chạy lại.', 'warning');
+                setBulkRunning(false);
+                return;
+            }
 
             // Stop early rather than hammering a wall — repeated failures usually
             // mean Facebook is blocking, and pushing on makes that worse.

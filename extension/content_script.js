@@ -316,6 +316,97 @@ function sweepReelUrls() {
 
 // ---------- COMMENT MODE (post one comment on this reel) ----------
 
+// Câu chữ Facebook dùng khi chặn thao tác. Chỉ quét trong hộp thoại / vùng
+// aria-live, KHÔNG quét cả trang: "thử lại sau" hoàn toàn có thể nằm trong bình
+// luận của người khác và sẽ thành báo động giả.
+const BLOCK_PHRASES = [
+  'thao tác quá nhanh', 'tạm thời bị chặn', 'tạm thời chặn',
+  'bị chặn khỏi', 'chặn khỏi việc', 'chúng tôi đã hạn chế',
+  'bạn không thể sử dụng tính năng này', 'vui lòng thử lại sau',
+  'temporarily blocked', 'action blocked', 'you can’t use this feature',
+  "you can't use this feature", 'try again later', 'too quickly',
+];
+
+function detectBlockDialog() {
+  const scopes = document.querySelectorAll(
+    'div[role="dialog"], div[role="alertdialog"], div[role="alert"], [aria-live="assertive"], [aria-live="polite"]'
+  );
+  for (const s of scopes) {
+    const raw = (s.innerText || '').trim();
+    if (!raw) continue;
+    const low = raw.toLowerCase();
+    const phrase = BLOCK_PHRASES.find((p) => low.includes(p));
+    if (phrase) return { phrase, text: raw.replace(/\s+/g, ' ').slice(0, 200) };
+  }
+  return null;
+}
+
+// Tên trang/tài khoản đang đăng, đọc ngay từ aria-label của ô soạn thảo:
+// "Bình luận dưới tên Phim hay review".
+function findPosterName() {
+  for (const el of document.querySelectorAll(COMMENT_NODE_SEL)) {
+    if (!isComposerNode(el)) continue;
+    const name = commentAuthorOf(el);
+    if (name) return name;
+  }
+  return '';
+}
+
+function normalizeForMatch(s) {
+  return String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+// Facebook cắt bình luận dài kèm "Xem thêm", nên khớp đoạn ĐẦU.
+function commentNeedle(text) {
+  const n = normalizeForMatch(text);
+  return n.length <= 40 ? n : n.slice(0, 30);
+}
+
+function findOwnComment(needle, posterName) {
+  const panel = findCommentScrollContainer();
+  const scope = panel || document;
+  let nearMiss = null;
+  for (const el of scope.querySelectorAll(COMMENT_NODE_SEL)) {
+    if (isComposerNode(el)) continue;
+    const body = normalizeForMatch(extractCommentText(el));
+    if (!body || !body.includes(needle)) continue;
+    const author = commentAuthorOf(el);
+    // Cùng nội dung nhưng khác người đăng thì không phải của ta — trên reel
+    // seeding, người khác dán y hệt một câu là chuyện bình thường.
+    if (posterName && normalizeForMatch(author) !== normalizeForMatch(posterName)) {
+      nearMiss = { author, body: body.slice(0, 60) };
+      continue;
+    }
+    return { found: true, author };
+  }
+  return { found: false, nearMiss };
+}
+
+// Bằng chứng duy nhất đáng tin: bình luận XUẤT HIỆN trong danh sách, đúng tên
+// người đăng, đúng nội dung — và VẪN CÒN ĐÓ sau vài giây. Facebook chèn bình
+// luận theo kiểu lạc quan rồi rút lại nếu server từ chối, nên thấy một lần là
+// chưa đủ.
+async function verifyCommentAppeared(text, posterName, opts = {}) {
+  const verifyMs = opts.verifyMs || 12000;
+  const persistMs = opts.persistMs || 3000;
+  const needle = commentNeedle(text);
+  const deadline = Date.now() + verifyMs;
+  let last = { found: false };
+
+  while (Date.now() < deadline) {
+    last = findOwnComment(needle, posterName);
+    if (last.found) {
+      await sleep(persistMs);
+      const again = findOwnComment(needle, posterName);
+      if (again.found) return { verified: true, author: again.author };
+      console.warn('[FB Seeding CS] bình luận xuất hiện rồi biến mất — Facebook đã rút lại');
+      return { verified: false, vanished: true };
+    }
+    await sleep(1000);
+  }
+  return { verified: false, nearMiss: last.nearMiss || null };
+}
+
 async function postComment(text, expectedReelId, opts = {}) {
   if (!text || !String(text).trim()) return { ok: false, error: 'empty_text' };
 
@@ -364,6 +455,11 @@ async function postComment(text, expectedReelId, opts = {}) {
     return { ok: false, error: 'no_composer', hint: 'Không tìm thấy ô soạn bình luận.' };
   }
 
+  // Đọc tên người đăng TRƯỚC khi gửi — sau khi gửi, ô soạn thảo có thể bị
+  // render lại và mất aria-label.
+  const posterName = findPosterName();
+  console.log('[FB Seeding CS] đăng dưới tên:', posterName || '(không đọc được)');
+
   // Facebook's composer submits on Enter, so a literal newline in the text
   // would post a half-finished comment. Collapse them to spaces.
   const oneLine = String(text).replace(/\s*\n+\s*/g, ' ').trim();
@@ -395,34 +491,66 @@ async function postComment(text, expectedReelId, opts = {}) {
   pressEnter(box);
   await sleep(2500);
 
-  // Verify: FB clears the composer once a comment is accepted.
+  // Ô soạn thảo trống KHÔNG phải bằng chứng đã đăng: Lexical xoá ô ngay khi
+  // nhấn Enter, trước khi biết server có nhận hay không. Đúng lý do vài bài cuối
+  // mỗi loạt báo thành công mà trên Facebook không có gì.
   let emptied = !(box.innerText || '').trim();
   if (!emptied) {
     await sleep(2500);
     emptied = !(box.innerText || '').trim();
-  }
-
-  if (emptied) {
-    console.log('[FB Seeding CS] comment posted');
-    return { ok: true, posted: oneLine, liked };
-  }
-
-  // Composer still holds our text → try the explicit send control once.
-  const btn = findSendButton();
-  if (btn) {
-    humanClick(btn);
-    await sleep(2500);
-    if (!(box.innerText || '').trim()) {
-      console.log('[FB Seeding CS] comment posted via send button');
-      return { ok: true, posted: oneLine, liked };
+    // Ô vẫn giữ chữ → thử nút gửi tường minh một lần.
+    if (!emptied) {
+      const btn = findSendButton();
+      if (btn) {
+        humanClick(btn);
+        await sleep(2500);
+        emptied = !(box.innerText || '').trim();
+      }
     }
+  }
+
+  const blockedEarly = detectBlockDialog();
+  if (blockedEarly) {
+    console.warn('[FB Seeding CS] Facebook đang chặn:', blockedEarly.text);
+    return {
+      ok: false, error: 'blocked', blockText: blockedEarly.text, typed,
+      hint: `Facebook đang chặn thao tác: "${blockedEarly.text}". Nghỉ một lúc rồi hãy chạy lại.`,
+    };
+  }
+
+  if (!emptied) {
+    return {
+      ok: false, error: 'submit_failed', typed,
+      hint: 'Đã điền nội dung nhưng Facebook không nhận. Tab được giữ lại để bạn bấm gửi thủ công.',
+    };
+  }
+
+  // Bằng chứng thật: bình luận có mặt trong danh sách, đúng tên, đúng nội dung,
+  // và vẫn còn đó sau vài giây.
+  const v = await verifyCommentAppeared(oneLine, posterName, opts);
+  if (v.verified) {
+    console.log('[FB Seeding CS] đã xác minh bình luận xuất hiện dưới tên', v.author);
+    return { ok: true, posted: oneLine, liked, verified: true, author: v.author };
+  }
+
+  const blocked = detectBlockDialog();
+  if (blocked) {
+    console.warn('[FB Seeding CS] Facebook đang chặn:', blocked.text);
+    return {
+      ok: false, error: 'blocked', blockText: blocked.text, typed,
+      hint: `Facebook đang chặn thao tác: "${blocked.text}". Nghỉ một lúc rồi hãy chạy lại.`,
+    };
   }
 
   return {
     ok: false,
-    error: 'submit_failed',
+    error: v.vanished ? 'comment_vanished' : 'not_visible',
     typed,
-    hint: 'Đã điền nội dung nhưng Facebook không nhận. Tab được giữ lại để bạn bấm gửi thủ công.',
+    nearMiss: v.nearMiss || null,
+    posterName,
+    hint: v.vanished
+      ? 'Bình luận hiện ra rồi bị Facebook rút lại — coi như chưa đăng. Tab được giữ lại để bạn kiểm tra.'
+      : 'Ô soạn thảo đã trống nhưng bình luận không xuất hiện trong danh sách — Facebook có thể đã bỏ âm thầm. Tab được giữ lại để bạn kiểm tra.',
   };
 }
 
@@ -728,6 +856,14 @@ const COMMENT_NODE_SEL =
 // duy nhất khớp selector, nên số đếm ra 1 và diag báo "có node bình luận nhưng
 // bóc ra rỗng" — nghe như lỗi bóc text, trong khi sự thật là reel im lặng.
 // Phân biệt bằng contenteditable: chỉ ô soạn thảo mới có.
+// "Comment by John" / "Bình luận dưới tên Anh Nhi vào 13 giờ trước"
+const COMMENT_LABEL_RE = /^(?:Comment by\s+(.+?)|Bình luận (?:của|by|dưới tên)\s+(.+?))(?:\s+(?:vào|on|·|,)\s+.*)?$/i;
+
+function commentAuthorOf(el) {
+  const m = (el.getAttribute('aria-label') || '').match(COMMENT_LABEL_RE);
+  return m ? (m[1] || m[2] || '').trim() : '';
+}
+
 function isComposerNode(el) {
   return !!(
     el.querySelector('[contenteditable="true"]') ||
@@ -977,7 +1113,6 @@ function collectCommentText(root) {
   // English: "Comment by John Doe"
   // Vietnamese: "Bình luận dưới tên Anh Nhi vào 13 giờ trước"
   //             "Bình luận của Anh Nhi"
-  const COMMENT_LABEL_RE = /^(?:Comment by\s+(.+?)|Bình luận (?:của|by|dưới tên)\s+(.+?))(?:\s+(?:vào|on|·|,)\s+.*)?$/i;
   scope.querySelectorAll('[aria-label]').forEach((el) => {
     const label = el.getAttribute('aria-label') || '';
     const m = label.match(COMMENT_LABEL_RE);
