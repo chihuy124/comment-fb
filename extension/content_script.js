@@ -523,17 +523,45 @@ async function scrapeComments() {
   // mode — that advances the vertical Reel feed and mixes comments from
   // adjacent reels into the DOM.
   const panel = findCommentScrollContainer();
-  for (let i = 0; i < 8; i++) {
-    if (panel) {
-      panel.scrollTop = panel.scrollHeight;
-    }
-    await sleep(1200);
-    await clickMoreCommentsButtons();
+
+  // Bấm "Xem thêm bình luận" CHO TỚI KHI HẾT, không phải 8 vòng cố định.
+  // Dừng khi: đạt tổng số FB công bố ("16/38"), hoặc 3 vòng liên tiếp không
+  // nạp thêm được node nào, hoặc chạm trần vòng lặp.
+  const MAX_ROUNDS = 40;
+  const total = readCommentTotal(panel);
+  let loaded = countCommentNodes(panel);
+  let idle = 0;
+  let rounds = 0;
+  if (total) console.log('[FB Seeding CS] FB báo tổng', total, 'bình luận');
+
+  for (; rounds < MAX_ROUNDS && idle < 3; rounds++) {
+    if (total && loaded >= total) break;
+    if (panel) panel.scrollTop = panel.scrollHeight;
+    await sleep(900);
+    const clicked = await clickMoreCommentsButtons(panel);
+    await sleep(clicked ? 1200 : 600);
+
     // Bail early if FB navigated us to a different reel mid-scrape
     if (extractReelId(location.href) !== startReelId) {
       console.warn('[FB Seeding CS] URL drifted during scrape, aborting');
+      stopAutoAdvance();
       return [];
     }
+
+    const now = countCommentNodes(panel);
+    if (now > loaded) {
+      idle = 0;
+      loaded = now;
+    } else {
+      idle++;
+    }
+  }
+  console.log(
+    '[FB Seeding CS] nạp xong sau', rounds, 'vòng —', loaded,
+    total ? `/${total}` : '', 'node bình luận trong DOM'
+  );
+  if (total && loaded < total) {
+    console.warn('[FB Seeding CS] CHƯA nạp hết:', loaded, '/', total);
   }
 
   // Final invariant check: URL must still be the same reel
@@ -616,11 +644,17 @@ function humanClick(el) {
   }
 }
 
+// Chỉ khớp node BÌNH LUẬN THẬT. Không dùng '[aria-label^="Bình luận"]' vì nó
+// khớp luôn cái NÚT mở panel (aria-label="Bình luận") nằm ngoài panel.
+const COMMENT_NODE_SEL =
+  '[aria-label^="Bình luận dưới tên"], [aria-label^="Bình luận của"], [aria-label^="Comment by"]';
+
+function countCommentNodes(scope) {
+  return (scope || document).querySelectorAll(COMMENT_NODE_SEL).length;
+}
+
 async function openCommentPanel() {
-  const isPanelOpen = () =>
-    !!document.querySelector(
-      '[aria-label^="Bình luận dưới tên"], [aria-label^="Comment by"], [aria-label^="Bình luận của"]'
-    );
+  const isPanelOpen = () => !!document.querySelector(COMMENT_NODE_SEL);
 
   if (isPanelOpen()) {
     console.log('[FB Seeding CS] panel already open');
@@ -686,12 +720,19 @@ function findCommentScrollContainer() {
   // Anchor the search on an actual comment node, then walk up until we hit a
   // scrollable ancestor. This binds the container to the CURRENT reel's
   // comment panel and never accidentally picks the reel-feed viewport.
-  const anchor = document.querySelector(
-    '[aria-label^="Bình luận"], [aria-label^="Comment by"], [aria-label^="Comment "]'
-  );
+  //
+  // Hai cái bẫy đã làm scrape trả về 0 bình luận:
+  //   1. anchor cũ khớp cả nút "Bình luận" (ngoài panel) → leo lên trúng khung
+  //      feed của reel. Cuộn nó = nhảy sang reel khác giữa chừng.
+  //   2. khung feed cũng scrollable, nên vòng lặp dừng ngay ở nó.
+  // Chốt chặn: container nào chứa <video> thì đó là khung feed, không phải panel.
+  const anchor = document.querySelector(COMMENT_NODE_SEL);
   if (!anchor) return null;
   let el = anchor.parentElement;
+  let lastSafe = null;
   while (el && el !== document.body) {
+    if (el.querySelector('video')) break; // đã leo ra tới khung reel → dừng
+    lastSafe = el;
     const cs = getComputedStyle(el);
     if (/auto|scroll/.test(cs.overflowY) && el.scrollHeight > el.clientHeight + 10) {
       console.log('[FB Seeding CS] scroll container: h=', el.scrollHeight, 'client=', el.clientHeight);
@@ -699,7 +740,10 @@ function findCommentScrollContainer() {
     }
     el = el.parentElement;
   }
-  return null;
+  // Chưa đủ comment để panel scroll được: vẫn trả về nhánh DOM của panel để
+  // collectCommentText() không quét cả trang (dính comment của reel kế bên).
+  if (lastSafe) console.log('[FB Seeding CS] panel không scroll được, dùng nhánh panel làm scope');
+  return lastSafe;
 }
 
 async function dismissLoginNags() {
@@ -725,9 +769,10 @@ async function switchToAllComments() {
     );
   });
 
-  for (const el of triggerCandidates.slice(0, 2)) {
+  for (const el of triggerCandidates.slice(0, 3)) {
     try {
-      el.click();
+      // humanClick, không phải el.click(): React của FB bỏ qua click trần.
+      humanClick(el);
       await sleep(900);
       const menuOpts = Array.from(document.querySelectorAll(
         'div[role="menuitem"], div[role="menuitemcheckbox"], div[role="menuitemradio"], span'
@@ -738,38 +783,62 @@ async function switchToAllComments() {
       });
       if (all) {
         console.log('[FB Seeding CS] switching to All Comments');
-        all.click();
+        humanClick(all);
         await sleep(1500);
-        return;
+        return true;
       }
+      console.warn('[FB Seeding CS] mở dropdown nhưng không thấy "Tất cả bình luận"');
     } catch (e) {}
   }
+  console.warn('[FB Seeding CS] không chuyển được sang "Tất cả bình luận" — đọc theo thứ tự mặc định');
+  return false;
 }
 
-async function clickMoreCommentsButtons() {
-  // Click every "Xem thêm bình luận" / "View more comments" button visible.
-  // Note: FB shows this as a link inside the comment panel. Sometimes the
-  // clickable target is a span; sometimes a parent div[role="button"].
-  const nodes = Array.from(document.querySelectorAll(
+const MORE_PREFIXES = [
+  'xem thêm bình luận', 'view more comments',
+  'xem thêm phản hồi', 'view more replies',
+  'xem trước', 'view previous',
+  'xem tất cả bình luận', 'view all comments',
+];
+
+// Trả về số nút đã bấm, để vòng lặp scrape biết khi nào hết cái để bấm.
+async function clickMoreCommentsButtons(scope) {
+  const root = scope || document;
+  const nodes = Array.from(root.querySelectorAll(
     'div[role="button"], span, a[role="button"], div[role="link"]'
   ));
-  let clicked = 0;
-  for (const b of nodes) {
+  const hits = nodes.filter((b) => {
     const t = (b.innerText || '').trim().toLowerCase();
-    if (!t) continue;
-    if (
-      t.startsWith('view more comments') ||
-      t.startsWith('xem thêm bình luận') ||
-      t.startsWith('xem thêm phản hồi') ||
-      t.startsWith('view more replies') ||
-      t.startsWith('view previous') ||
-      t.startsWith('xem trước')
-    ) {
-      try { b.click(); clicked++; } catch (e) {}
-    }
+    return !!t && MORE_PREFIXES.some((p) => t.startsWith(p));
+  });
+
+  // Một nút thật thường lồng nhau (div[role=button] > span cùng text). Bỏ node
+  // cha khi con của nó cũng khớp, để không bấm hai lần vào cùng một nút.
+  const innermost = hits.filter((h) => !hits.some((o) => o !== h && h.contains(o)));
+
+  let clicked = 0;
+  for (const b of innermost) {
+    // humanClick chứ không phải b.click(): React của FB bỏ qua click trần —
+    // đây chính là lý do trước đây log ghi "clicked 2 buttons" mà DOM không
+    // nạp thêm bình luận nào.
+    try { humanClick(b); clicked++; } catch (e) {}
   }
-  if (clicked > 0) console.log('[FB Seeding CS] clicked', clicked, 'more-comments buttons');
+  if (clicked > 0) console.log('[FB Seeding CS] bấm', clicked, 'nút "Xem thêm bình luận"');
   await sleep(700);
+  return clicked;
+}
+
+// Đọc bộ đếm FB in trên nút, ví dụ "Xem thêm bình luận 16/38" → 38.
+function readCommentTotal(scope) {
+  const root = scope || document;
+  let total = 0;
+  root.querySelectorAll('div[role="button"], span, div[role="link"]').forEach((el) => {
+    const t = (el.innerText || '').trim().toLowerCase();
+    if (!MORE_PREFIXES.some((p) => t.startsWith(p))) return;
+    const m = t.match(/(\d+)\s*\/\s*(\d+)/);
+    if (m) total = Math.max(total, parseInt(m[2], 10));
+  });
+  return total;
 }
 
 // `root` scopes collection to the open comment panel. That matters because
