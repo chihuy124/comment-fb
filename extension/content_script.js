@@ -24,7 +24,12 @@
         mission.exclude || [],
         mission.want || 0
       );
-      chrome.runtime.sendMessage({ type: 'HARVEST_RESULT', urls: res.urls, stuck: res.stuck });
+      chrome.runtime.sendMessage({
+        type: 'HARVEST_RESULT', urls: res.urls, stuck: res.stuck,
+        // Facebook không chạy feed khi trang không hiển thị — background cần biết
+        // để nói thẳng lý do thay vì để user đoán tại sao chỉ ra 2 URL.
+        visibility: document.visibilityState,
+      });
       return;
     }
     if (mission.mode === 'comment') {
@@ -151,6 +156,7 @@ async function harvestMode(durationMs, excludeList, want) {
         type: 'DISCOVER_PROGRESS',
         count: newCount(),
         urls: Array.from(found),
+        visibility: document.visibilityState,
       });
     } catch (e) { /* service worker đang ngủ — vòng sau gửi lại */ }
   }

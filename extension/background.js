@@ -170,7 +170,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (p) {
       clearTimeout(p.timer);
       pendingHarvests.delete(sender.tab.id);
-      p.resolve({ urls: msg.urls || [], stuck: !!msg.stuck });
+      p.resolve({ urls: msg.urls || [], stuck: !!msg.stuck, visibility: msg.visibility });
     }
     return false;
   }
@@ -296,6 +296,39 @@ function countIntentMatches(comments, keywords) {
   return matched;
 }
 
+// Cửa sổ riêng cho hunt. Đo thật trên Chrome: trong TAB ẨN, Facebook không chạy
+// feed Reels (bấm "Thẻ tiếp theo" không đổi URL) và trang search không lazy-load
+// thêm (scrollTop đứng im, bodyH đứng im) — nên harvest 100 giây chỉ ra 2 URL.
+// Timer cũng bị Chrome bóp: sleep(250) mất ~3,5 giây sau khi tab ẩn một lúc.
+//
+// Mở cửa sổ riêng với focused:false: tab trong đó là tab đang active của cửa sổ
+// nên Facebook coi là 'visible', mà bàn phím vẫn ở cửa sổ chính của user.
+// Cảnh báo: nếu cửa sổ này bị che kín 100% thì macOS vẫn báo hidden — content
+// script gửi visibility thật về để chuyện đó không âm thầm.
+let huntWindowId = null;
+
+async function createHuntWindow() {
+  try {
+    const win = await chrome.windows.create({
+      url: 'about:blank', focused: false, type: 'normal',
+      width: 520, height: 820, left: 20, top: 20,
+    });
+    const tab = win.tabs && win.tabs[0];
+    if (tab && tab.id != null) return { windowId: win.id, tabId: tab.id };
+  } catch (e) {
+    console.warn('[BG][hunt] không mở được cửa sổ riêng, dùng tab nền:', e);
+  }
+  const tab = await chrome.tabs.create({ url: 'about:blank', active: false });
+  return { windowId: null, tabId: tab.id };
+}
+
+async function closeHuntWindow() {
+  if (huntWindowId == null) return;
+  const id = huntWindowId;
+  huntWindowId = null;
+  try { await chrome.windows.remove(id); } catch (e) { /* user đã đóng rồi */ }
+}
+
 // Dịch `diag` của content script thành một dòng đọc được. Không có diag nghĩa là
 // content script không gửi gì về — tức là nó chết hoặc hết hạn, khác hẳn với
 // reel thật sự không có bình luận.
@@ -360,9 +393,10 @@ async function huntReels(opts, appTabId) {
   // changes its id, and every later call has to follow the new one.
   let tabId;
   try {
-    const tab = await chrome.tabs.create({ url: 'about:blank', active: false });
-    tabId = tab.id;
-    console.log('[BG][hunt] tab id=', tabId);
+    const w = await createHuntWindow();
+    tabId = w.tabId;
+    huntWindowId = w.windowId;
+    console.log('[BG][hunt] tab id=', tabId, 'trong cửa sổ riêng', huntWindowId);
   } catch (e) {
     console.error('[BG][hunt] tab create failed:', e);
     return { ok: false, error: 'tab_create_failed', reels: [] };
@@ -482,6 +516,17 @@ async function huntReels(opts, appTabId) {
         // 0 và vòng lặp quay mãi: `checked` không tăng nên maxChecks không bao
         // giờ chạm tới. Đúng cái thấy trong log: 3 vòng "+0 new urls dryRounds=0".
         dryRounds = (harvest.stuck || added === 0) ? dryRounds + 1 : 0;
+
+        // Đo thật: trang ẩn thì Facebook không chạy feed Reels và không lazy-load
+        // kết quả search. Ra ít URL mà trang lại đang ẩn thì gần như chắc chắn là
+        // vì thế, không phải vì Facebook hết reel.
+        if (harvest.visibility === 'hidden' && added < 3) {
+          console.warn(
+            '[BG][hunt] cửa sổ hunt đang BỊ CHE (visibility=hidden) → Facebook không chạy feed.',
+            'Kéo cửa sổ hunt ra chỗ hở trên màn hình rồi chạy lại.'
+          );
+          report({ phase: 'hidden-window', sourceUrl: src });
+        }
         console.log(
           `[BG][hunt] +${added} new urls (saw ${harvest.urls.length}), frontier=${frontier.length}` +
           `${recovery ? `, ${recovery} recovery attempt(s)` : ''}` +
@@ -533,6 +578,7 @@ async function huntReels(opts, appTabId) {
       missions.delete(tabId);
       chrome.tabs.remove(tabId).catch(() => {});
     }
+    await closeHuntWindow();
   }
 
   const stopReason = huntAbort ? 'stopped'
@@ -752,7 +798,11 @@ async function recreateHuntTab(oldTabId) {
   try {
     // Created blank on purpose: navigateAndHarvest sets the mission before it
     // navigates, so the content script can never load before its mission exists.
-    const t = await chrome.tabs.create({ url: 'about:blank', active: false });
+    // Phải nằm trong cửa sổ hunt và là tab active của cửa sổ đó, nếu không nó
+    // thành tab ẩn và Facebook lại không chạy feed.
+    const t = huntWindowId != null
+      ? await chrome.tabs.create({ url: 'about:blank', windowId: huntWindowId, active: true })
+      : await chrome.tabs.create({ url: 'about:blank', active: false });
     console.log('[BG][hunt] replaced tab', oldTabId, '→', t.id);
     return t.id;
   } catch (e) {
