@@ -103,6 +103,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const p = pendingHarvests.get(sender.tab.id);
       if (p?.rearm) p.rearm();
     }
+    if (m?.mode === 'scrape') {
+      const p = pendingScrapes.get(sender.tab.id);
+      if (p?.rearm) p.rearm();
+    }
     sendResponse(m || { mode: null });
     return false;
   }
@@ -776,21 +780,33 @@ function navigateAndScrape(tabId, url, timeoutMs, rich) {
       resolve(empty);
       return;
     }
-    const timer = setTimeout(() => {
-      pendingScrapes.delete(tabId);
-      resolve(empty);
-    }, timeoutMs);
-    pendingScrapes.set(tabId, {
-      resolve: (payload) => {
-        clearTimeout(timer);
-        const comments = payload?.comments || [];
-        resolve(rich
-          ? { comments, foundUrls: payload?.foundUrls || [], diag: payload?.diag || null }
-          : comments);
-      },
-      timer,
-      keepTab: true,
-    });
+    const entry = { timer: null, armed: false, keepTab: true };
+    const arm = (ms) => {
+      clearTimeout(entry.timer);
+      entry.timer = setTimeout(() => {
+        pendingScrapes.delete(tabId);
+        console.warn('[BG] scrape timeout on', url);
+        resolve(empty);
+      }, ms);
+    };
+    // Y như harvest: đồng hồ chạy từ lúc navigate, nhưng tab nền tải Facebook mất
+    // vài giây tới vài chục giây. Đo thật: cào xong một reel mất 34,8s tính từ lúc
+    // content script bắt đầu — cộng thời gian tải trang là vượt hạn 45s. Nên tính
+    // lại hạn từ lúc content script hỏi GET_MISSION.
+    entry.rearm = () => {
+      if (entry.armed) return;
+      entry.armed = true;
+      arm(timeoutMs);
+    };
+    entry.resolve = (payload) => {
+      clearTimeout(entry.timer);
+      const comments = payload?.comments || [];
+      resolve(rich
+        ? { comments, foundUrls: payload?.foundUrls || [], diag: payload?.diag || null }
+        : comments);
+    };
+    arm(timeoutMs);
+    pendingScrapes.set(tabId, entry);
   });
 }
 
