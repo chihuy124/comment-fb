@@ -233,12 +233,20 @@ async function advanceOneReel() {
 
 let lastWorkingAdvance = null;
 
+// Confirmed from a live page dump: the real controls are labelled "Thẻ tiếp
+// theo" and "Mục tiếp theo". The names I had been guessing at ("Reel tiếp
+// theo" etc.) never existed, so this mechanism silently never fired and every
+// advance fell through to ArrowDown.
+const NEXT_REEL_LABELS = [
+  'thẻ tiếp theo', 'mục tiếp theo', 'next card', 'next item',
+  'next reel', 'reel tiếp theo', 'next video', 'video tiếp theo', 'reel kế tiếp',
+];
+
 function clickNextReelControl() {
-  const labels = ['next reel', 'reel tiếp theo', 'next video', 'video tiếp theo', 'reel kế tiếp'];
   for (const el of document.querySelectorAll('[aria-label]')) {
-    const l = (el.getAttribute('aria-label') || '').toLowerCase();
-    if (labels.includes(l)) {
-      el.click();
+    const l = (el.getAttribute('aria-label') || '').trim().toLowerCase();
+    if (NEXT_REEL_LABELS.includes(l)) {
+      humanClick(el);
       return true;
     }
   }
@@ -424,6 +432,20 @@ async function likeCurrentReel() {
   return false;
 }
 
+// Lower is better: on-screen elements sort ahead of off-screen ones, and among
+// those the closest to the viewport centre wins.
+function visibleScore(el, centre) {
+  try {
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) return 1e9;
+    const onScreen = r.bottom > 0 && r.top < window.innerHeight;
+    const dist = Math.abs((r.top + r.bottom) / 2 - centre);
+    return (onScreen ? 0 : 1e6) + dist;
+  } catch (e) {
+    return 1e9;
+  }
+}
+
 function findCommentComposer() {
   const nodes = document.querySelectorAll('div[contenteditable="true"]');
   for (const el of nodes) {
@@ -484,16 +506,23 @@ async function scrapeComments() {
   // Desktop Reel UI: comments live in a side panel that opens on click.
   const opened = await openCommentPanel();
   console.log('[FB Seeding CS] panel opened =', opened);
+
+  // Fail loudly. Previously we carried on, and collectCommentText's fallback
+  // strategies scraped ~15 strings of page furniture that matched no keywords —
+  // reported as "15 comments, 0 intent", indistinguishable from a reel that
+  // genuinely has no one asking for a link.
+  if (!opened) {
+    console.warn('[FB Seeding CS] comment panel never opened — reporting no comments read');
+    stopAutoAdvance();
+    return [];
+  }
+
   await switchToAllComments();
 
   // Only scroll the comment panel itself. NEVER scroll the window in scrape
   // mode — that advances the vertical Reel feed and mixes comments from
   // adjacent reels into the DOM.
   const panel = findCommentScrollContainer();
-  if (!panel) {
-    console.warn('[FB Seeding CS] no comment container found — reel likely has 0 comments');
-    // Fall through — collectCommentText will run once and yield whatever is on page.
-  }
   for (let i = 0; i < 8; i++) {
     if (panel) {
       panel.scrollTop = panel.scrollHeight;
@@ -514,9 +543,13 @@ async function scrapeComments() {
     return [];
   }
 
-  const collected = collectCommentText();
+  // Scope to the panel so a neighbouring preloaded reel's comments can't leak in
+  const collected = collectCommentText(panel || undefined);
   stopAutoAdvance();
-  console.log('[FB Seeding CS] collected', collected.length, 'comment candidates on reel', startReelId);
+  console.log(
+    '[FB Seeding CS] collected', collected.length, 'comment candidates on reel', startReelId,
+    panel ? '(scoped to panel)' : '(document-wide — no panel container found)'
+  );
 
   const seen = new Set();
   const uniq = [];
@@ -613,7 +646,17 @@ async function openCommentPanel() {
     const text = (el.innerText || '').trim().slice(0, 60);
     if (matches(label) || matches(text)) targets.push({ el, label: label || text });
   }
-  console.log('[FB Seeding CS] found', targets.length, 'candidate comment buttons');
+
+  // Facebook preloads the neighbouring reels, so the page really does contain
+  // several "Bình luận" buttons (one per reel, e.g. 57 and 9). Clicking the
+  // first one in DOM order is a coin flip that can open the wrong reel's
+  // panel — prefer the button actually on screen, nearest the viewport centre.
+  const centre = window.innerHeight / 2;
+  targets.sort((a, b) => visibleScore(a.el, centre) - visibleScore(b.el, centre));
+  console.log(
+    '[FB Seeding CS] found', targets.length, 'candidate comment buttons;',
+    'trying', targets.map((t) => t.label).slice(0, 4).join(' / ')
+  );
 
   for (const { el, label } of targets) {
     // React handlers might sit on the element itself, its parent, or even
@@ -729,11 +772,15 @@ async function clickMoreCommentsButtons() {
   await sleep(700);
 }
 
-function collectCommentText() {
+// `root` scopes collection to the open comment panel. That matters because
+// Facebook keeps the neighbouring reels mounted, so a document-wide sweep can
+// mix in comments belonging to a different reel.
+function collectCommentText(root) {
+  const scope = root || document;
   const out = [];
 
   // Strategy 1: role="article" (works on News Feed posts, sometimes on Reel side panel)
-  document.querySelectorAll('div[role="article"]').forEach((a) => {
+  scope.querySelectorAll('div[role="article"]').forEach((a) => {
     const label = a.getAttribute('aria-label') || '';
     if (/^(Post|Bài viết)\b/i.test(label) || /video by/i.test(label) || /reel by/i.test(label)) return;
     const author = extractAuthor(a);
@@ -746,7 +793,7 @@ function collectCommentText() {
   // Vietnamese: "Bình luận dưới tên Anh Nhi vào 13 giờ trước"
   //             "Bình luận của Anh Nhi"
   const COMMENT_LABEL_RE = /^(?:Comment by\s+(.+?)|Bình luận (?:của|by|dưới tên)\s+(.+?))(?:\s+(?:vào|on|·|,)\s+.*)?$/i;
-  document.querySelectorAll('[aria-label]').forEach((el) => {
+  scope.querySelectorAll('[aria-label]').forEach((el) => {
     const label = el.getAttribute('aria-label') || '';
     const m = label.match(COMMENT_LABEL_RE);
     if (!m) return;
@@ -757,7 +804,7 @@ function collectCommentText() {
   });
 
   // Strategy 3: <ul aria-label="Comments"> — legacy
-  document.querySelectorAll('ul[aria-label*="Comment"], ul[aria-label*="ình luận"]').forEach((ul) => {
+  scope.querySelectorAll('ul[aria-label*="Comment"], ul[aria-label*="ình luận"]').forEach((ul) => {
     ul.querySelectorAll('li').forEach((li) => {
       const text = extractCommentText(li);
       const author = extractAuthor(li);
@@ -768,7 +815,7 @@ function collectCommentText() {
   // Strategy 4: walk visible dir="auto" nodes inside likely comment container
   // Filter out video caption / UI chrome by requiring the node to be inside
   // something with 'comment' or 'bình luận' in an aria-label somewhere up.
-  document.querySelectorAll('div[dir="auto"]').forEach((el) => {
+  scope.querySelectorAll('div[dir="auto"]').forEach((el) => {
     const text = (el.innerText || '').trim();
     if (!text || text.length < 3 || text.length > 400) return;
     if (/^(Like|Thích|Reply|Trả lời|Share|Chia sẻ|\d+[hmdwy]|\d+ (weeks?|months?|days?|hours?|mins?))$/i.test(text)) return;
