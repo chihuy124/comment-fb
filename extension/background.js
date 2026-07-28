@@ -156,7 +156,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (p) {
       clearTimeout(p.timer);
       pendingHarvests.delete(sender.tab.id);
-      p.resolve(msg.urls || []);
+      p.resolve({ urls: msg.urls || [], stuck: !!msg.stuck });
     }
     return false;
   }
@@ -317,24 +317,38 @@ async function huntReels(opts, appTabId) {
   const settings = await getSettings();
 
   // Replenishment sources, tried in order whenever the frontier runs dry.
-  const replenishSources = ['https://www.facebook.com/reel/', 'https://www.facebook.com/watch/'];
+  // The vertical reel feed comes first and is revisited most: it is the one
+  // truly endless source, since each advance loads another reel.
+  const replenishSources = [
+    'https://www.facebook.com/reel/',
+    'https://www.facebook.com/watch/',
+    'https://www.facebook.com/reel/',
+  ];
   for (const kw of searchKeywords) {
-    replenishSources.push(`https://www.facebook.com/search/videos/?q=${encodeURIComponent(kw)}`);
+    const q = encodeURIComponent(kw);
+    replenishSources.push(`https://www.facebook.com/search/videos/?q=${q}`);
+    replenishSources.push(`https://www.facebook.com/search/posts/?q=${q}`);
+    replenishSources.push('https://www.facebook.com/reel/');
   }
-  // Sources are cycled, not consumed once: revisiting /reel/ or /watch/ makes
-  // Facebook serve different videos each time, so the pool keeps refilling and
-  // maxChecks stays the real stopping condition. Give up only after several
-  // consecutive rounds that yield nothing new.
+  // Sources are cycled. Each harvest is told what we have already visited and
+  // how many new reels we want, so it scrolls DEEPER into the feed rather than
+  // handing back the same first screenful — that was the bug behind premature
+  // "Facebook không trả thêm Reels mới": zero new URLs meant "I re-scanned the
+  // top of the feed", not "the feed is empty".
+  //
+  // A round only counts as dry when the page itself reported it could not
+  // advance at all (no new links, no scroll movement, no URL change).
   let replenishRound = 0;
   let dryRounds = 0;
-  const MAX_DRY_ROUNDS = 3;
+  const MAX_DRY_ROUNDS = 8;
+  const WANT_PER_HARVEST = 15;
 
   try {
     while (qualified.length < targetCount && checked < maxChecks && !huntAbort) {
       // Out of reels to try → harvest a fresh batch from the next source
       if (frontier.length === 0) {
         if (dryRounds >= MAX_DRY_ROUNDS) {
-          console.log(`[BG][hunt] ${MAX_DRY_ROUNDS} rounds with nothing new — stopping`);
+          console.log(`[BG][hunt] ${MAX_DRY_ROUNDS} sources in a row could not advance — stopping`);
           break;
         }
         const src = replenishSources[replenishRound % replenishSources.length];
@@ -344,12 +358,22 @@ async function huntReels(opts, appTabId) {
         // `source` here would clobber the envelope and the page would drop it.
         report({ phase: 'replenish', sourceUrl: src });
         console.log(`[BG][hunt] replenishing from ${src} (round ${replenishRound})`);
-        const urls = await navigateAndHarvest(tab.id, src, HARVEST_MS_PER_SOURCE + 25000);
+
+        const harvest = await navigateAndHarvest(tab.id, src, HARVEST_CAP_MS + 25000, {
+          durationMs: HARVEST_CAP_MS,
+          exclude: Array.from(visited),
+          want: WANT_PER_HARVEST,
+        });
         const sizeBefore = frontier.length;
-        pushFrontier(urls);
+        pushFrontier(harvest.urls);
         const added = frontier.length - sizeBefore;
-        dryRounds = added === 0 ? dryRounds + 1 : 0;
-        console.log(`[BG][hunt] +${added} new urls (saw ${urls.length}), frontier=${frontier.length}`);
+
+        // Only a page that genuinely refused to move counts against us
+        dryRounds = harvest.stuck ? dryRounds + 1 : 0;
+        console.log(
+          `[BG][hunt] +${added} new urls (saw ${harvest.urls.length}), frontier=${frontier.length}` +
+          `${harvest.stuck ? ' [stuck]' : ''} dryRounds=${dryRounds}`
+        );
         if (frontier.length === 0) continue; // try the next source
       }
 
@@ -421,6 +445,10 @@ function canonicalReelUrl(raw) {
 // How long the in-tab feed-walking phase runs before we switch to
 // background-driven URL navigation (which is far more reliable).
 const HARVEST_MS_PER_SOURCE = 20000;
+// Hunt harvests are goal-driven — they return as soon as enough new reels are
+// found — so this is only an upper bound. Walking a vertical reel feed to
+// collect ~15 fresh reels needs far more than the old flat 20s.
+const HARVEST_CAP_MS = 100000;
 
 // Pages worth harvesting reel URLs from. The Watch feed gives whatever FB's
 // algorithm serves this account; search pages give topically targeted results
@@ -457,9 +485,11 @@ async function discoverFromFeed(totalBudgetMs, startUrl, keywords) {
       console.log('[BG] harvest budget spent, skipping remaining sources');
       break;
     }
-    const urls = await navigateAndHarvest(tab.id, target, HARVEST_MS_PER_SOURCE + 25000);
-    urls.forEach((u) => queueSet.add(u));
-    console.log(`[BG] harvested ${urls.length} from ${target} → total ${queueSet.size}`);
+    const harvest = await navigateAndHarvest(tab.id, target, HARVEST_MS_PER_SOURCE + 25000, {
+      exclude: Array.from(queueSet),
+    });
+    harvest.urls.forEach((u) => queueSet.add(u));
+    console.log(`[BG] harvested ${harvest.urls.length} from ${target} → total ${queueSet.size}`);
   }
 
   const collected = [];
@@ -510,22 +540,31 @@ async function discoverFromFeed(totalBudgetMs, startUrl, keywords) {
 
 // Navigate a tab to a feed/search page and wait for the content script to
 // report every reel URL it could harvest there. Tab stays open for reuse.
-function navigateAndHarvest(tabId, url, timeoutMs) {
+// `opts.exclude` lets the content script keep scrolling past reels we have
+// already visited instead of stopping at the first screenful; `opts.want` is
+// how many genuinely-new reels it should try to come back with.
+function navigateAndHarvest(tabId, url, timeoutMs, opts = {}) {
   return new Promise(async (resolve) => {
-    missions.set(tabId, { mode: 'harvest', durationMs: HARVEST_MS_PER_SOURCE });
+    const empty = { urls: [], stuck: false };
+    missions.set(tabId, {
+      mode: 'harvest',
+      durationMs: opts.durationMs || HARVEST_MS_PER_SOURCE,
+      exclude: opts.exclude || [],
+      want: opts.want || 0,
+    });
     try {
       await chrome.tabs.update(tabId, { url });
     } catch (e) {
-      resolve([]);
+      resolve(empty);
       return;
     }
     const timer = setTimeout(() => {
       pendingHarvests.delete(tabId);
       console.warn('[BG] harvest timeout on', url);
-      resolve([]);
+      resolve(empty);
     }, timeoutMs);
     pendingHarvests.set(tabId, {
-      resolve: (urls) => { clearTimeout(timer); resolve(urls || []); },
+      resolve: (payload) => { clearTimeout(timer); resolve(payload || empty); },
       timer,
     });
   });

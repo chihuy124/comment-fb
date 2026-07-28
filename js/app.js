@@ -1065,7 +1065,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 target_reached: 'đã gom đủ mục tiêu',
                 max_checks: `đã kiểm hết giới hạn ${maxChecks} Reels`,
                 stopped: 'bạn đã bấm dừng',
-                sources_exhausted: 'Facebook không trả thêm Reels mới',
+                sources_exhausted: 'các trang nguồn không cuộn thêm được (Facebook có thể đang giới hạn, thử lại sau ít phút)',
             };
             const why = reasons[response?.stopReason] || response?.stopReason || '';
             renderHuntProgress(`<strong>Xong:</strong> ${huntedItems.length}/${targetCount} Reels đạt chuẩn sau khi kiểm ${response?.checked || 0} Reels — ${why}.`);

@@ -19,8 +19,12 @@
     if (!mission || !mission.mode) return;
 
     if (mission.mode === 'harvest') {
-      const urls = await harvestMode(mission.durationMs || 20000);
-      chrome.runtime.sendMessage({ type: 'HARVEST_RESULT', urls });
+      const res = await harvestMode(
+        mission.durationMs || 20000,
+        mission.exclude || [],
+        mission.want || 0
+      );
+      chrome.runtime.sendMessage({ type: 'HARVEST_RESULT', urls: res.urls, stuck: res.stuck });
       return;
     }
     if (mission.mode === 'comment') {
@@ -73,42 +77,79 @@ function canonicalize(href) {
 
 // ---------- DISCOVER MODE ----------
 
-async function harvestMode(durationMs) {
-  // Scroll whatever feed/search page we were navigated to and collect every
-  // reel/video permalink present. No scraping here — background navigates each
-  // harvested URL individually afterwards, which is what guarantees the
-  // comments it reads belong to that reel.
-  console.log('[FB Seeding CS] harvest start on', location.href, 'for', durationMs, 'ms');
+async function harvestMode(durationMs, excludeList, want) {
+  // Goal-driven: keep scrolling this feed until `want` reels the caller has
+  // NOT already seen have been found. Previously this scrolled for a fixed
+  // 20s and returned everything on screen, so revisiting a feed produced the
+  // same first screenful and the caller — which filters against what it has
+  // already visited — concluded Facebook had run out of reels. The feed is
+  // effectively infinite; we just were not scrolling deep enough.
+  const exclude = new Set(excludeList || []);
+  const target = want > 0 ? want : Infinity;
+
+  console.log(
+    `[FB Seeding CS] harvest start on ${location.href} | want ${target} new | ${exclude.size} excluded | cap ${durationMs}ms`
+  );
+
   const found = new Set();
   const endTime = Date.now() + durationMs;
-  let idleRounds = 0;
+  const newCount = () => {
+    let n = 0;
+    for (const u of found) if (!exclude.has(u)) n++;
+    return n;
+  };
 
   await sleep(3000);
   sweepReelUrls().forEach((u) => found.add(u));
-  console.log('[FB Seeding CS] initial sweep:', found.size);
+  console.log('[FB Seeding CS] initial sweep:', found.size, 'total /', newCount(), 'new');
 
-  while (Date.now() < endTime) {
-    const before = found.size;
+  // "Stuck" means the page genuinely will not advance: no new permalinks AND
+  // no movement in scroll position, URL or document height. Absence of NEW
+  // urls alone is not enough — deep in a feed we may re-see known reels for a
+  // while before hitting fresh ones.
+  let noProgressRounds = 0;
+  const STUCK_ROUNDS = 10;
+  let lastSignature = '';
+
+  while (Date.now() < endTime && newCount() < target) {
+    const beforeTotal = found.size;
     scrollFeed();
     await sleep(1500);
     sweepReelUrls().forEach((u) => found.add(u));
 
-    if (found.size === before) {
-      idleRounds++;
-      if (idleRounds >= 8) {
-        console.log('[FB Seeding CS] 8 idle rounds — stopping harvest');
-        break;
+    const scroller = findFeedScroller();
+    const signature = [
+      location.href,
+      Math.round(window.scrollY),
+      scroller ? Math.round(scroller.scrollTop) : -1,
+      document.body ? document.body.scrollHeight : -1,
+    ].join('|');
+
+    const gainedUrls = found.size > beforeTotal;
+    const moved = signature !== lastSignature;
+    lastSignature = signature;
+
+    if (!gainedUrls && !moved) {
+      noProgressRounds++;
+      if (noProgressRounds >= STUCK_ROUNDS) {
+        console.log('[FB Seeding CS] page will not advance — harvest stuck');
+        return { urls: Array.from(found), stuck: true };
       }
     } else {
-      idleRounds = 0;
-      console.log('[FB Seeding CS]   harvest at', found.size);
-      chrome.runtime.sendMessage({ type: 'DISCOVER_PROGRESS', count: found.size });
+      noProgressRounds = 0;
+      if (gainedUrls) {
+        chrome.runtime.sendMessage({ type: 'DISCOVER_PROGRESS', count: newCount() });
+      }
     }
   }
 
   const urls = Array.from(found);
-  console.log('[FB Seeding CS] harvest done:', urls.length, 'URLs from', location.href);
-  return urls;
+  const satisfied = newCount() >= target;
+  console.log(
+    `[FB Seeding CS] harvest done: ${urls.length} total, ${newCount()} new${satisfied ? ' (target met)' : ' (time cap)'}`
+  );
+  // Hitting the time cap without finding anything new is also a dead end
+  return { urls, stuck: !satisfied && newCount() === 0 };
 }
 
 function findFeedScroller() {
