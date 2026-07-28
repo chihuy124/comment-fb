@@ -69,7 +69,10 @@ cào comment của reel khác.
 Fixture **chỉ nghe `mousedown`**, đúng như React của FB — `el.click()` trần
 không kích hoạt gì cả.
 
-Ba kịch bản: UI A, UI B, và UI B khi panel không mở được.
+Sáu kịch bản: UI A, UI B, UI B khi panel không mở được, tab nền không đo được
+vị trí nút, và hai kịch bản reel 539 bình luận (ngân sách 1ms / ngân sách thoải
+mái) — đo thật trên Chrome: vòng nạp chạy 45 giây vẫn chưa xong, đã nạp 187
+node, trong khi hạn của background đúng bằng 45 giây.
 
 Năm bug bị bắt — bốn cái đầu là lý do reel 38 bình luận báo về `0`:
 - `findCommentScrollContainer()` neo vào `[aria-label^="Bình luận"]` nên trúng
@@ -80,6 +83,12 @@ Năm bug bị bắt — bốn cái đầu là lý do reel 38 bình luận báo v
 - vòng lặp 8 vòng cố định, không lặp cho tới khi hết bình luận
 - `switchToAllComments()` cũng `.click()` trần → không bao giờ chuyển sang
   "Tất cả bình luận", và im lặng khi thất bại
+- vòng "bấm cho tới hết" (`MAX_ROUNDS=40`, ~2,5s/vòng ≈ 100 giây) dài hơn hạn
+  cào 45 giây của background → background bỏ cuộc, trả rỗng, cả lượt cào công
+  phu bị ghi thành `0 comments`. Đây là hồi tố của chính bản sửa "đọc hết bình
+  luận": bản 8 vòng cũ chỉ mất ~16 giây nên vừa khít. Giờ background gửi
+  `budgetMs` và content script tự dừng, bóc chỗ đã nạp; thêm trần
+  `MAX_COMMENTS=200` vì kết quả vốn đã bị cắt còn 200
 - khi panel của reel hiện tại không mở, `openCommentPanel()` bấm tiếp sang nút
   comment của reel preload → cào comment của REEL KHÁC rồi gán cho reel này
   (reel rác bị chấm là chất lượng). Giờ chỉ bấm nút đang hiển thị trên màn hình,

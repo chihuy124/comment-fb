@@ -155,8 +155,8 @@ function buildVideosUi() {
 
 // Panel đóng. Hai nút comment trên trang (reel hiện tại + reel preload kế bên).
 function buildReelUi(opts = {}) {
-  const { panelOpens = true, zeroRects = false } = opts;
-  const SERVED = 22;
+  const { panelOpens = true, zeroRects = false, served = 22 } = opts;
+  const SERVED = served;
   const url = 'https://www.facebook.com/reel/2504266503383241';
 
   const ctx = makeDom(`
@@ -276,11 +276,11 @@ function check(name, cond, detail) {
   }
 }
 
-async function run(label, fx, asserts) {
+async function run(label, fx, asserts, scrapeOpts) {
   console.log(`\n=== ${label} ===`);
   const api = loadContentScript(fx);
   let res = null, threw = null;
-  try { res = await api.scrapeComments(); } catch (e) { threw = e; }
+  try { res = await api.scrapeComments(scrapeOpts); } catch (e) { threw = e; }
   check('không ném lỗi', !threw, String(threw && threw.stack));
   const diag = (res && res.diag) || {};
   console.log('  diag:', JSON.stringify(diag));
@@ -354,6 +354,30 @@ async function run(label, fx, asserts) {
       check('diag đánh dấu không xác minh được đúng reel',
         diag.identityUnverified === true, JSON.stringify(diag));
     });
+
+  // Reel 946844311522548 có 539 bình luận. Đo thật trên Chrome: vòng nạp chạy
+  // 45 giây vẫn chưa xong (đã nạp 187 node) → background hết hạn 45s, trả rỗng,
+  // và cả lượt cào bị ghi thành "0 comments". Phải tự dừng trong ngân sách.
+  await run('Reel 539 bình luận, ngân sách chỉ 1ms', buildReelUi({ served: 539 }),
+    (comments, st, api, diag) => {
+      console.log(`\n  → ${comments.length} bình luận | nạp ${st.loaded}/539\n`);
+      check('KHÔNG trả rỗng vì hết giờ', comments.length > 0, `trả về ${comments.length}`);
+      check('bóc đúng những gì đã nạp được', comments.length === st.loaded,
+        `${comments.length} vs ${st.loaded} node`);
+      check('diag ghi rõ là hết ngân sách thời gian', diag.hitBudget === true,
+        JSON.stringify(diag));
+    }, { budgetMs: 1 });
+
+  await run('Reel 539 bình luận, ngân sách thoải mái', buildReelUi({ served: 539 }),
+    (comments, st, api, diag) => {
+      console.log(`\n  → ${comments.length} bình luận | nạp ${st.loaded}/539 | ` +
+        `${diag.rounds} vòng\n`);
+      check('dừng ở mức 200 chứ không nạp hết 539',
+        st.loaded >= 200 && st.loaded < 539, `nạp ${st.loaded}`);
+      check('diag ghi rõ là đã đủ số bình luận cần', diag.hitCommentCap === true,
+        JSON.stringify(diag));
+      check('trả về tối đa 200', comments.length === 200, `${comments.length}`);
+    }, { budgetMs: 600000 });
 
   console.log('');
   if (failures.length) {

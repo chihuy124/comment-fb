@@ -309,6 +309,8 @@ function logZeroCommentDiag(url, diag) {
     `FB báo tổng=${diag.claimedTotal || 0}`,
     `node trong DOM=${diag.loadedNodes ?? diag.loadedAtStart ?? '?'}`,
     `số lần bấm "xem thêm"=${diag.moreClicks ?? 0}`,
+    diag.elapsedMs ? `mất ${Math.round(diag.elapsedMs / 1000)}s/${Math.round((diag.budgetMs || 0) / 1000)}s` : null,
+    diag.hitBudget ? 'HẾT-NGÂN-SÁCH-THỜI-GIAN' : null,
     diag.scopedToPanel === false ? 'không-tìm-được-panel-container' : null,
     diag.sortedByAll === false ? 'không-đổi-được-sang-Tất-cả-bình-luận' : null,
     diag.driftedTo ? `URL nhảy sang ${diag.driftedTo}` : null,
@@ -761,7 +763,13 @@ async function recreateHuntTab(oldTabId) {
 function navigateAndScrape(tabId, url, timeoutMs, rich) {
   return new Promise(async (resolve) => {
     const empty = rich ? { comments: [], foundUrls: [] } : [];
-    missions.set(tabId, { mode: 'scrape' });
+    // Nói cho content script biết nó có bao nhiêu thời gian. Không có con số này
+    // thì vòng nạp "Xem thêm bình luận" chạy quá hạn (đo thật trên một reel 539
+    // bình luận: 45s vẫn chưa xong, đã nạp 187 node) → background bỏ cuộc, trả
+    // rỗng, và cả một lượt cào công phu bị ghi thành "0 comments".
+    // Trừ 12s cho phần mở panel + đổi sang "Tất cả bình luận" + gửi kết quả.
+    const budgetMs = Math.max(15000, timeoutMs - 12000);
+    missions.set(tabId, { mode: 'scrape', budgetMs });
     try {
       await chrome.tabs.update(tabId, { url });
     } catch (e) {

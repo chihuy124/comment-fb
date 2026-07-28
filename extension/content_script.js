@@ -37,7 +37,7 @@
     }
     if (mission.mode === 'scrape') {
       await sleep(2000);
-      const { comments, diag } = await scrapeComments();
+      const { comments, diag } = await scrapeComments({ budgetMs: mission.budgetMs });
       // Reel pages sometimes reference neighbouring reels — hand them back so
       // the hunter can keep walking without another harvest round.
       const foundUrls = Array.from(sweepReelUrls());
@@ -497,9 +497,17 @@ function pressEnter(el) {
 // tab đó bị điều hướng liên tục nên log bị xoá trước khi kịp đọc. Không có
 // diag thì "0 comments" không phân biệt được: reel thật sự không có bình luận,
 // panel không mở được, hay nút bấm không phản hồi.
-async function scrapeComments() {
+// Nhiều nhất bấy nhiêu bình luận. Kết quả vốn đã bị cắt còn 200 ở cuối hàm, nên
+// nạp quá con số này là đốt thời gian vào thứ sẽ bị bỏ đi — mà thời gian hết là
+// mất TRẮNG cả lượt cào.
+const MAX_COMMENTS = 200;
+
+async function scrapeComments(opts = {}) {
+  const startedAt = Date.now();
+  const budgetMs = opts.budgetMs || 33000;
+  const deadline = startedAt + budgetMs;
   const startReelId = extractReelId(location.href);
-  const diag = { reel: startReelId, why: null };
+  const diag = { reel: startReelId, why: null, budgetMs };
   const done = (comments, why) => {
     if (why) diag.why = why;
     return { comments, diag };
@@ -565,6 +573,18 @@ async function scrapeComments() {
 
   for (; rounds < MAX_ROUNDS && idle < 3; rounds++) {
     if (total && loaded >= total) break;
+    // Hai cái phanh mới. Trước đây chỉ có MAX_ROUNDS=40, mỗi vòng ~2,5s → tới
+    // 100 giây, quá xa hạn 45s của background.
+    if (Date.now() >= deadline) {
+      diag.hitBudget = true;
+      console.warn('[FB Seeding CS] hết ngân sách thời gian sau', rounds, 'vòng — bóc luôn chỗ đã nạp');
+      break;
+    }
+    if (loaded >= MAX_COMMENTS) {
+      diag.hitCommentCap = true;
+      console.log('[FB Seeding CS] đã đủ', loaded, 'bình luận — không nạp thêm');
+      break;
+    }
     // Tìm lại container mỗi vòng: đổi sang "Tất cả bình luận" hoặc mở rộng
     // danh sách làm React thay cả nhánh DOM, giữ tham chiếu cũ là cuộn vào
     // một node đã bị gỡ khỏi trang.
@@ -602,6 +622,7 @@ async function scrapeComments() {
   diag.rounds = rounds;
   diag.moreClicks = moreClicks;
   diag.loadedNodes = loaded;
+  diag.elapsedMs = Date.now() - startedAt;
 
   // Final invariant check: URL must still be the same reel
   if (extractReelId(location.href) !== startReelId) {
@@ -628,6 +649,7 @@ async function scrapeComments() {
     }
   }
   diag.collected = uniq.length;
+  diag.elapsedMs = Date.now() - startedAt;
   // Panel mở được, có node bình luận trong DOM, nhưng bóc ra không được chữ nào
   // → lỗi bóc text, không phải reel im lặng. Phân biệt hai cái này là điểm chính.
   const why = uniq.length === 0
