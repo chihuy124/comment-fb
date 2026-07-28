@@ -307,9 +307,12 @@ async function huntReels(opts, appTabId) {
     }).catch(() => {});
   };
 
-  let tab;
+  // Mutable: the escalation ladder below may replace the tab entirely, which
+  // changes its id, and every later call has to follow the new one.
+  let tabId;
   try {
-    tab = await chrome.tabs.create({ url: 'about:blank', active: false });
+    const tab = await chrome.tabs.create({ url: 'about:blank', active: false });
+    tabId = tabId;
   } catch (e) {
     return { ok: false, error: 'tab_create_failed', reels: [] };
   }
@@ -346,6 +349,13 @@ async function huntReels(opts, appTabId) {
 
   try {
     while (qualified.length < targetCount && checked < maxChecks && !huntAbort) {
+      // The escalation ladder can fail to produce a replacement tab; without one
+      // there is nothing left to drive.
+      if (tabId == null) {
+        console.warn('[BG][hunt] no working tab left — stopping');
+        break;
+      }
+
       // Out of reels to try → harvest a fresh batch from the next source
       if (frontier.length === 0) {
         if (dryRounds >= MAX_DRY_ROUNDS) {
@@ -374,24 +384,39 @@ async function huntReels(opts, appTabId) {
           return n;
         };
 
-        let harvest = await navigateAndHarvest(tab.id, src, HARVEST_CAP_MS + 25000, harvestOpts);
+        let harvest = await navigateAndHarvest(tabId, src, HARVEST_CAP_MS + 25000, harvestOpts);
 
-        // Stuck is usually transient (stalled lazy-load, bloated DOM), so give
-        // the same source a couple of forced reloads before writing it off.
-        let reloads = 0;
-        while (harvest.stuck && reloads < MAX_RELOADS_PER_SOURCE && !huntAbort) {
-          reloads++;
+        // Escalation ladder for a stalled source. The previous version called
+        // chrome.tabs.reload, which reloads the tab's CURRENT url — and by then
+        // the reel feed has drifted to /reel/<id>, so it just reloaded a reel we
+        // had already checked. That is why reloading measured 9 → 9 new urls.
+        //   1. re-navigate to the SOURCE url (via about:blank, so an unchanged
+        //      url still produces a brand-new document)
+        //   2. throw the tab away and start a fresh one
+        // Only if both fail does the source count as dry.
+        let recovery = 0;
+        while (harvest.stuck && recovery < 2 && !huntAbort) {
+          recovery++;
           const newBefore = countNew(harvest.urls);
-          report({ phase: 'reload', sourceUrl: src, attempt: reloads });
-          console.log(`[BG][hunt] stuck → reload ${reloads}/${MAX_RELOADS_PER_SOURCE} of ${src}`);
+          const how = recovery === 1 ? 'renavigate' : 'fresh-tab';
+          report({ phase: 'reload', sourceUrl: src, attempt: recovery, how });
+          console.log(`[BG][hunt] stuck → ${how} (${recovery}/2) on ${src}`);
 
-          const retry = await reloadAndHarvest(tab.id, HARVEST_CAP_MS + 25000, harvestOpts);
+          let retry;
+          if (recovery === 1) {
+            retry = await renavigateAndHarvest(tabId, src, HARVEST_CAP_MS + 25000, harvestOpts);
+          } else {
+            tabId = await recreateHuntTab(tabId);
+            if (tabId == null) break; // cannot continue without a tab
+            retry = await navigateAndHarvest(tabId, src, HARVEST_CAP_MS + 25000, harvestOpts);
+          }
+
           const merged = new Set([...(harvest.urls || []), ...(retry.urls || [])]);
           harvest = { urls: Array.from(merged), stuck: retry.stuck };
 
-          // Logged so it's measurable whether reloading actually pays off here
+          // Logged so it stays measurable which rung of the ladder actually helps
           console.log(
-            `[BG][hunt] reload ${reloads} → new urls ${newBefore} → ${countNew(harvest.urls)}` +
+            `[BG][hunt] ${how} → new urls ${newBefore} → ${countNew(harvest.urls)}` +
             `${retry.stuck ? ' (still stuck)' : ' (unstuck)'}`
           );
         }
@@ -414,7 +439,7 @@ async function huntReels(opts, appTabId) {
       checked++;
       report({ phase: 'checking', current: target });
 
-      const result = await navigateAndScrape(tab.id, target, settings.perTabTimeoutMs, true);
+      const result = await navigateAndScrape(tabId, target, settings.perTabTimeoutMs, true);
       const comments = result.comments || [];
       // Reel pages sometimes expose neighbouring reels — keeps the crawl going
       pushFrontier(result.foundUrls);
@@ -444,8 +469,10 @@ async function huntReels(opts, appTabId) {
       });
     }
   } finally {
-    missions.delete(tab.id);
-    chrome.tabs.remove(tab.id).catch(() => {});
+    if (tabId != null) {
+      missions.delete(tabId);
+      chrome.tabs.remove(tabId).catch(() => {});
+    }
   }
 
   const stopReason = huntAbort ? 'stopped'
@@ -608,15 +635,37 @@ function navigateAndHarvest(tabId, url, timeoutMs, opts = {}) {
   return runHarvest(tabId, timeoutMs, opts, () => chrome.tabs.update(tabId, { url }), url);
 }
 
-// Same page, forced fresh from the network. Used to shake a feed loose when it
-// has stopped advancing — lazy-loading stalls and bloated DOMs are usually
-// transient, so giving up on the source outright wastes a perfectly good one.
-function reloadAndHarvest(tabId, timeoutMs, opts = {}) {
-  return runHarvest(
-    tabId, timeoutMs, opts,
-    () => chrome.tabs.reload(tabId, { bypassCache: true }),
-    'reload'
-  );
+// Rung 1 of the stuck ladder: go back to the SOURCE url. Routing through
+// about:blank first guarantees a brand-new document even when the tab is
+// already sitting on that exact url, which a plain update would no-op on.
+async function renavigateAndHarvest(tabId, url, timeoutMs, opts = {}) {
+  try {
+    await chrome.tabs.update(tabId, { url: 'about:blank' });
+    await sleep(400);
+  } catch (e) { /* fall through — the navigate below is what matters */ }
+  return navigateAndHarvest(tabId, url, timeoutMs, opts);
+}
+
+// Rung 2: discard the tab and start clean. A fresh tab gets a fresh renderer
+// and a fresh SPA state, which a same-tab navigation does not. Returns the new
+// tab id, or null if a replacement could not be created.
+async function recreateHuntTab(oldTabId) {
+  missions.delete(oldTabId);
+  pendingHarvests.delete(oldTabId);
+  pendingScrapes.delete(oldTabId);
+  pendingComments.delete(oldTabId);
+  try { await chrome.tabs.remove(oldTabId); } catch (e) { /* already gone */ }
+
+  try {
+    // Created blank on purpose: navigateAndHarvest sets the mission before it
+    // navigates, so the content script can never load before its mission exists.
+    const t = await chrome.tabs.create({ url: 'about:blank', active: false });
+    console.log('[BG][hunt] replaced tab', oldTabId, '→', t.id);
+    return t.id;
+  } catch (e) {
+    console.error('[BG][hunt] could not create replacement tab:', e);
+    return null;
+  }
 }
 
 // Navigate an existing tab to a reel URL and wait for its content script to
