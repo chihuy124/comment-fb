@@ -1030,6 +1030,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     ];
                     if (msg.phase === 'replenish') {
                         parts.push(`<span style="color:var(--text-muted);">đang lấy thêm Reels từ ${escapeHtml(String(msg.sourceUrl || '').replace('https://www.facebook.com', ''))}</span>`);
+                    } else if (msg.phase === 'reload') {
+                        parts.push(`<span style="color:var(--accent-red);">trang bị treo — tải lại lần ${msg.attempt || 1}: ${escapeHtml(String(msg.sourceUrl || '').replace('https://www.facebook.com', ''))}</span>`);
                     } else if (msg.phase === 'checked') {
                         parts.push(`<span style="color:var(--text-muted);">Reel vừa xong: ${msg.lastCommentCount || 0} comment, ${msg.lastIntentCount || 0} khớp ${msg.lastPassed ? '✅' : '✗'}</span>`);
                     } else if (msg.phase === 'checking') {

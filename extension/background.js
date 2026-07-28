@@ -342,6 +342,7 @@ async function huntReels(opts, appTabId) {
   let dryRounds = 0;
   const MAX_DRY_ROUNDS = 8;
   const WANT_PER_HARVEST = 15;
+  const MAX_RELOADS_PER_SOURCE = 2;
 
   try {
     while (qualified.length < targetCount && checked < maxChecks && !huntAbort) {
@@ -359,20 +360,51 @@ async function huntReels(opts, appTabId) {
         report({ phase: 'replenish', sourceUrl: src });
         console.log(`[BG][hunt] replenishing from ${src} (round ${replenishRound})`);
 
-        const harvest = await navigateAndHarvest(tab.id, src, HARVEST_CAP_MS + 25000, {
+        const harvestOpts = {
           durationMs: HARVEST_CAP_MS,
           exclude: Array.from(visited),
           want: WANT_PER_HARVEST,
-        });
+        };
+        const countNew = (urls) => {
+          let n = 0;
+          for (const u of urls || []) {
+            const c = canonicalReelUrl(u) || u;
+            if (c && !visited.has(c)) n++;
+          }
+          return n;
+        };
+
+        let harvest = await navigateAndHarvest(tab.id, src, HARVEST_CAP_MS + 25000, harvestOpts);
+
+        // Stuck is usually transient (stalled lazy-load, bloated DOM), so give
+        // the same source a couple of forced reloads before writing it off.
+        let reloads = 0;
+        while (harvest.stuck && reloads < MAX_RELOADS_PER_SOURCE && !huntAbort) {
+          reloads++;
+          const newBefore = countNew(harvest.urls);
+          report({ phase: 'reload', sourceUrl: src, attempt: reloads });
+          console.log(`[BG][hunt] stuck → reload ${reloads}/${MAX_RELOADS_PER_SOURCE} of ${src}`);
+
+          const retry = await reloadAndHarvest(tab.id, HARVEST_CAP_MS + 25000, harvestOpts);
+          const merged = new Set([...(harvest.urls || []), ...(retry.urls || [])]);
+          harvest = { urls: Array.from(merged), stuck: retry.stuck };
+
+          // Logged so it's measurable whether reloading actually pays off here
+          console.log(
+            `[BG][hunt] reload ${reloads} → new urls ${newBefore} → ${countNew(harvest.urls)}` +
+            `${retry.stuck ? ' (still stuck)' : ' (unstuck)'}`
+          );
+        }
+
         const sizeBefore = frontier.length;
         pushFrontier(harvest.urls);
         const added = frontier.length - sizeBefore;
 
-        // Only a page that genuinely refused to move counts against us
+        // Only a source that stayed stuck through its reloads counts against us
         dryRounds = harvest.stuck ? dryRounds + 1 : 0;
         console.log(
           `[BG][hunt] +${added} new urls (saw ${harvest.urls.length}), frontier=${frontier.length}` +
-          `${harvest.stuck ? ' [stuck]' : ''} dryRounds=${dryRounds}`
+          `${reloads ? `, ${reloads} reload(s)` : ''}${harvest.stuck ? ' [stuck]' : ''} dryRounds=${dryRounds}`
         );
         if (frontier.length === 0) continue; // try the next source
       }
@@ -543,7 +575,9 @@ async function discoverFromFeed(totalBudgetMs, startUrl, keywords) {
 // `opts.exclude` lets the content script keep scrolling past reels we have
 // already visited instead of stopping at the first screenful; `opts.want` is
 // how many genuinely-new reels it should try to come back with.
-function navigateAndHarvest(tabId, url, timeoutMs, opts = {}) {
+// `navigateFn` decides how we get onto the page — a fresh URL, or a reload of
+// whatever is already there.
+function runHarvest(tabId, timeoutMs, opts, navigateFn, label) {
   return new Promise(async (resolve) => {
     const empty = { urls: [], stuck: false };
     missions.set(tabId, {
@@ -553,14 +587,14 @@ function navigateAndHarvest(tabId, url, timeoutMs, opts = {}) {
       want: opts.want || 0,
     });
     try {
-      await chrome.tabs.update(tabId, { url });
+      await navigateFn();
     } catch (e) {
       resolve(empty);
       return;
     }
     const timer = setTimeout(() => {
       pendingHarvests.delete(tabId);
-      console.warn('[BG] harvest timeout on', url);
+      console.warn('[BG] harvest timeout on', label);
       resolve(empty);
     }, timeoutMs);
     pendingHarvests.set(tabId, {
@@ -568,6 +602,21 @@ function navigateAndHarvest(tabId, url, timeoutMs, opts = {}) {
       timer,
     });
   });
+}
+
+function navigateAndHarvest(tabId, url, timeoutMs, opts = {}) {
+  return runHarvest(tabId, timeoutMs, opts, () => chrome.tabs.update(tabId, { url }), url);
+}
+
+// Same page, forced fresh from the network. Used to shake a feed loose when it
+// has stopped advancing — lazy-loading stalls and bloated DOMs are usually
+// transient, so giving up on the source outright wastes a perfectly good one.
+function reloadAndHarvest(tabId, timeoutMs, opts = {}) {
+  return runHarvest(
+    tabId, timeoutMs, opts,
+    () => chrome.tabs.reload(tabId, { bypassCache: true }),
+    'reload'
+  );
 }
 
 // Navigate an existing tab to a reel URL and wait for its content script to
