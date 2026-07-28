@@ -40,6 +40,17 @@ Ba bug bị bắt, đều lấy thẳng từ log thật khi hunt không ra một
   chạm tới → **quay vô hạn**. Chạy test trên code cũ: tới vòng 12345 vẫn chưa
   dừng
 
+## zero-comment-diag.js — lý do "0 comments"
+
+Log của content script nằm trong console của **tab nền**, mà tab đó bị điều
+hướng liên tục nên log bị xoá trước khi đọc được. Nên lý do phải gửi kèm
+`SCRAPE_RESULT` và in ở background log. Test kiểm tra ba trường hợp khác hẳn
+nhau đều được phân biệt rõ:
+
+- `panel-không-mở-được`
+- `có-node-bình-luận-nhưng-bóc-ra-rỗng` (kèm số node thật có trong DOM)
+- content script không trả lời (hết hạn / tab chết) — không có `diag` nào
+
 ## scrape-comments.js — cào bình luận
 
 Chạy `scrapeComments()` thật trên DOM jsdom dựng theo **hai UI bình luận thật**

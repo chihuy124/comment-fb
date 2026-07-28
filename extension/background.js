@@ -117,7 +117,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         missions.delete(sender.tab.id);
         chrome.tabs.remove(sender.tab.id).catch(() => {});
       }
-      p.resolve({ comments: msg.comments || [], foundUrls: msg.foundUrls || [] });
+      p.resolve({
+        comments: msg.comments || [],
+        foundUrls: msg.foundUrls || [],
+        diag: msg.diag || null,
+      });
     }
     return false;
   }
@@ -286,6 +290,30 @@ function countIntentMatches(comments, keywords) {
     if (kws.some((k) => nc.includes(k))) matched.push(String(c).trim());
   }
   return matched;
+}
+
+// Dịch `diag` của content script thành một dòng đọc được. Không có diag nghĩa là
+// content script không gửi gì về — tức là nó chết hoặc hết hạn, khác hẳn với
+// reel thật sự không có bình luận.
+function logZeroCommentDiag(url, diag) {
+  if (!diag) {
+    console.warn(`[BG][hunt]    ↳ 0 comments: content script KHÔNG trả lời (hết hạn ${DEFAULT_SETTINGS.perTabTimeoutMs}ms hoặc tab chết)`);
+    return;
+  }
+  const bits = [
+    `lý do=${diag.why || '?'}`,
+    `panel=${diag.panelOpened ? `mở (${diag.openedVia})` : 'KHÔNG mở'}`,
+    `nút tìm thấy=${diag.candidates ?? '?'}`,
+    `trên màn hình=${diag.onScreen ?? '?'}`,
+    diag.identityUnverified ? 'KHÔNG-đo-được-vị-trí-nút' : null,
+    `FB báo tổng=${diag.claimedTotal || 0}`,
+    `node trong DOM=${diag.loadedNodes ?? diag.loadedAtStart ?? '?'}`,
+    `số lần bấm "xem thêm"=${diag.moreClicks ?? 0}`,
+    diag.scopedToPanel === false ? 'không-tìm-được-panel-container' : null,
+    diag.sortedByAll === false ? 'không-đổi-được-sang-Tất-cả-bình-luận' : null,
+    diag.driftedTo ? `URL nhảy sang ${diag.driftedTo}` : null,
+  ].filter(Boolean);
+  console.warn(`[BG][hunt]    ↳ 0 comments trên ${url}: ${bits.join(' | ')}`);
 }
 
 async function huntReels(opts, appTabId) {
@@ -471,6 +499,10 @@ async function huntReels(opts, appTabId) {
       console.log(
         `[BG][hunt] ${checked}. ${pass ? '✅' : '✗'} ${target} → ${comments.length} comments, ${matched.length} intent`
       );
+      // Reel về 0 bình luận thì in luôn lý do. Log của content script nằm trong
+      // console của tab nền, bị xoá mỗi lần điều hướng, nên đây là chỗ duy nhất
+      // đọc được nguyên nhân sau khi hunt chạy xong.
+      if (comments.length === 0) logZeroCommentDiag(target, result.diag);
 
       if (pass) {
         qualified.push({
@@ -744,7 +776,9 @@ function navigateAndScrape(tabId, url, timeoutMs, rich) {
       resolve: (payload) => {
         clearTimeout(timer);
         const comments = payload?.comments || [];
-        resolve(rich ? { comments, foundUrls: payload?.foundUrls || [] } : comments);
+        resolve(rich
+          ? { comments, foundUrls: payload?.foundUrls || [], diag: payload?.diag || null }
+          : comments);
       },
       timer,
       keepTab: true,

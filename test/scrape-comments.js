@@ -155,7 +155,7 @@ function buildVideosUi() {
 
 // Panel đóng. Hai nút comment trên trang (reel hiện tại + reel preload kế bên).
 function buildReelUi(opts = {}) {
-  const { panelOpens = true } = opts;
+  const { panelOpens = true, zeroRects = false } = opts;
   const SERVED = 22;
   const url = 'https://www.facebook.com/reel/2504266503383241';
 
@@ -173,16 +173,26 @@ function buildReelUi(opts = {}) {
       <div id="panelwrap"></div>
     </div>`, url);
 
-  const { doc, rectAll, pinRect, scrollable } = ctx;
+  const { doc, pinRect, scrollable } = ctx;
+  let rectAll = ctx.rectAll;
   const viewer = doc.getElementById('viewer');
   const panelwrap = doc.getElementById('panelwrap');
   const state = { loaded: 0, panelScrolls: 0, viewerScrolls: 0, sortedByAll: false, wrongReelOpened: false, ui: 'reel', served: SERVED };
 
   scrollable(viewer, 9000, 700, () => { state.viewerScrolls++; });
-  rectAll(doc.body);
-  // Nút của reel hiện tại nằm giữa màn hình; nút của reel preload ở ngoài màn hình.
-  pinRect(doc.getElementById('cmt-btn'), 500);
-  pinRect(doc.getElementById('cmt-btn-next'), 3000);
+  if (zeroRects) {
+    // Tab nền không tính layout: mọi getBoundingClientRect() trả về toàn 0.
+    const zero = { top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0, x: 0, y: 0 };
+    rectAll = (root) => {
+      [root, ...root.querySelectorAll('*')].forEach((el) => { el.getBoundingClientRect = () => zero; });
+    };
+    rectAll(doc.body);
+  } else {
+    rectAll(doc.body);
+    // Nút của reel hiện tại nằm giữa màn hình; nút của reel preload ngoài màn hình.
+    pinRect(doc.getElementById('cmt-btn'), 500);
+    pinRect(doc.getElementById('cmt-btn-next'), 3000);
+  }
 
   let panel = null, list = null;
 
@@ -269,10 +279,12 @@ function check(name, cond, detail) {
 async function run(label, fx, asserts) {
   console.log(`\n=== ${label} ===`);
   const api = loadContentScript(fx);
-  let comments = null, threw = null;
-  try { comments = await api.scrapeComments(); } catch (e) { threw = e; }
+  let res = null, threw = null;
+  try { res = await api.scrapeComments(); } catch (e) { threw = e; }
   check('không ném lỗi', !threw, String(threw && threw.stack));
-  await asserts(comments || [], fx.state, api);
+  const diag = (res && res.diag) || {};
+  console.log('  diag:', JSON.stringify(diag));
+  await asserts((res && res.comments) || [], fx.state, api, diag);
 }
 
 (async () => {
@@ -322,12 +334,26 @@ async function run(label, fx, asserts) {
       api.findCommentScrollContainer().id === 'panel');
   });
 
-  await run('UI B — panel không mở được', buildReelUi({ panelOpens: false }), (comments, st) => {
+  await run('UI B — panel không mở được', buildReelUi({ panelOpens: false }), (comments, st, api, diag) => {
     check('trả về rỗng (báo thật là không đọc được)', comments.length === 0,
       JSON.stringify(comments));
     check('KHÔNG mở panel của reel preload để cào bừa', !st.wrongReelOpened);
     check('không cuộn khung feed', st.viewerScrolls === 0, `đã cuộn ${st.viewerScrolls} lần`);
+    check('diag nói rõ lý do là panel không mở được',
+      diag.why === 'panel-không-mở-được' && diag.panelOpened === false,
+      JSON.stringify(diag));
   });
+
+  // Tab nền: Chrome đôi khi không tính layout, mọi rect ra 0. Trước khi có
+  // fallback, không nút nào "trên màn hình" → không bấm gì → im lặng 0 bình luận.
+  await run('UI B — tab nền, mọi rect = 0 (không đo được vị trí)',
+    buildReelUi({ zeroRects: true }), (comments, st, api, diag) => {
+      console.log(`\n  → ${comments.length} bình luận | nạp ${st.loaded}/${st.served}\n`);
+      check('vẫn mở được panel thay vì im lặng trả 0', st.loaded > 0);
+      check('đọc được bình luận', comments.length === st.served, `đọc được ${comments.length}`);
+      check('diag đánh dấu không xác minh được đúng reel',
+        diag.identityUnverified === true, JSON.stringify(diag));
+    });
 
   console.log('');
   if (failures.length) {

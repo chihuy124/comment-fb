@@ -37,11 +37,13 @@
     }
     if (mission.mode === 'scrape') {
       await sleep(2000);
-      const comments = await scrapeComments();
+      const { comments, diag } = await scrapeComments();
       // Reel pages sometimes reference neighbouring reels — hand them back so
       // the hunter can keep walking without another harvest round.
       const foundUrls = Array.from(sweepReelUrls());
-      chrome.runtime.sendMessage({ type: 'SCRAPE_RESULT', url: location.href, comments, foundUrls });
+      chrome.runtime.sendMessage({
+        type: 'SCRAPE_RESULT', url: location.href, comments, foundUrls, diag,
+      });
       return;
     }
   } catch (e) {
@@ -490,8 +492,18 @@ function pressEnter(el) {
 
 // ---------- SCRAPE MODE (comments on a single Reel) ----------
 
+// Trả về { comments, diag }. `diag` được gửi kèm SCRAPE_RESULT và in ra ở
+// background log, vì log của content script nằm trong console của tab nền —
+// tab đó bị điều hướng liên tục nên log bị xoá trước khi kịp đọc. Không có
+// diag thì "0 comments" không phân biệt được: reel thật sự không có bình luận,
+// panel không mở được, hay nút bấm không phản hồi.
 async function scrapeComments() {
   const startReelId = extractReelId(location.href);
+  const diag = { reel: startReelId, why: null };
+  const done = (comments, why) => {
+    if (why) diag.why = why;
+    return { comments, diag };
+  };
   console.log('[FB Seeding CS] scrape start on', location.href, 'reelId=', startReelId);
 
   // CRITICAL: ask background to inject a MAIN-world script that patches
@@ -512,8 +524,9 @@ async function scrapeComments() {
   await dismissLoginNags();
 
   // Desktop Reel UI: comments live in a side panel that opens on click.
-  const opened = await openCommentPanel();
+  const opened = await openCommentPanel(diag);
   console.log('[FB Seeding CS] panel opened =', opened);
+  diag.panelOpened = opened;
 
   // Fail loudly. Previously we carried on, and collectCommentText's fallback
   // strategies scraped ~15 strings of page furniture that matched no keywords —
@@ -522,10 +535,10 @@ async function scrapeComments() {
   if (!opened) {
     console.warn('[FB Seeding CS] comment panel never opened — reporting no comments read');
     stopAutoAdvance();
-    return [];
+    return done([], 'panel-không-mở-được');
   }
 
-  await switchToAllComments();
+  diag.sortedByAll = await switchToAllComments();
 
   // Only scroll the comment panel itself. NEVER scroll the window in scrape
   // mode — that advances the vertical Reel feed and mixes comments from
@@ -544,6 +557,10 @@ async function scrapeComments() {
   let loaded = countCommentNodes(panel);
   let idle = 0;
   let rounds = 0;
+  let moreClicks = 0;
+  diag.scopedToPanel = !!panel;
+  diag.claimedTotal = total;
+  diag.loadedAtStart = loaded;
   if (total) console.log('[FB Seeding CS] FB báo tổng', total, 'bình luận');
 
   for (; rounds < MAX_ROUNDS && idle < 3; rounds++) {
@@ -555,13 +572,15 @@ async function scrapeComments() {
     if (panel) panel.scrollTop = panel.scrollHeight;
     await sleep(900);
     const clicked = await clickMoreCommentsButtons(panel);
+    moreClicks += clicked;
     await sleep(clicked ? 1200 : 600);
 
     // Bail early if FB navigated us to a different reel mid-scrape
     if (extractReelId(location.href) !== startReelId) {
       console.warn('[FB Seeding CS] URL drifted during scrape, aborting');
       stopAutoAdvance();
-      return [];
+      diag.driftedTo = extractReelId(location.href);
+      return done([], 'url-nhảy-sang-reel-khác');
     }
 
     const now = countCommentNodes(panel);
@@ -580,11 +599,16 @@ async function scrapeComments() {
     console.warn('[FB Seeding CS] CHƯA nạp hết:', loaded, '/', total);
   }
 
+  diag.rounds = rounds;
+  diag.moreClicks = moreClicks;
+  diag.loadedNodes = loaded;
+
   // Final invariant check: URL must still be the same reel
   if (extractReelId(location.href) !== startReelId) {
     console.warn('[FB Seeding CS] URL drifted before extract, discarding');
     stopAutoAdvance();
-    return [];
+    diag.driftedTo = extractReelId(location.href);
+    return done([], 'url-nhảy-sang-reel-khác');
   }
 
   // Scope to the panel so a neighbouring preloaded reel's comments can't leak in
@@ -603,7 +627,13 @@ async function scrapeComments() {
       uniq.push(c);
     }
   }
-  return uniq.slice(0, 200);
+  diag.collected = uniq.length;
+  // Panel mở được, có node bình luận trong DOM, nhưng bóc ra không được chữ nào
+  // → lỗi bóc text, không phải reel im lặng. Phân biệt hai cái này là điểm chính.
+  const why = uniq.length === 0
+    ? (loaded > 0 ? 'có-node-bình-luận-nhưng-bóc-ra-rỗng' : 'panel-mở-nhưng-không-có-bình-luận-nào')
+    : null;
+  return done(uniq.slice(0, 200), why);
 }
 
 function startAutoPauseLoop(startReelId) {
@@ -669,11 +699,12 @@ function countCommentNodes(scope) {
   return (scope || document).querySelectorAll(COMMENT_NODE_SEL).length;
 }
 
-async function openCommentPanel() {
+async function openCommentPanel(diag = {}) {
   const isPanelOpen = () => !!document.querySelector(COMMENT_NODE_SEL);
 
   if (isPanelOpen()) {
     console.log('[FB Seeding CS] panel already open');
+    diag.openedVia = 'đã-mở-sẵn';
     return true;
   }
 
@@ -708,15 +739,30 @@ async function openCommentPanel() {
   // preload — bấm vào đó sẽ mở panel của REEL KHÁC, và ta gán nhầm comment của
   // nó cho reel hiện tại (reel rác bị chấm là chất lượng, và ngược lại).
   // Thà báo "không mở được panel" để hunter bỏ qua reel này còn hơn.
-  const onScreen = targets.filter(({ el }) => visibleScore(el, centre) < 1e6);
-  const dropped = targets.length - onScreen.length;
+  let queue = targets.filter(({ el }) => visibleScore(el, centre) < 1e6);
+  diag.candidates = targets.length;
+  diag.onScreen = queue.length;
+
+  // Tab nền đôi khi không tính layout, mọi getBoundingClientRect() ra 0 → không
+  // nút nào "trên màn hình" và ta sẽ không bấm gì cả, im lặng trả 0 bình luận.
+  // Thà thử nút gần đầu DOM nhất, nhưng ghi rõ là không xác minh được reel nào.
+  if (queue.length === 0 && targets.length > 0) {
+    queue = targets.slice(0, 1);
+    diag.identityUnverified = true;
+    console.warn(
+      '[FB Seeding CS] không đo được vị trí nút nào (tab nền không layout?) —',
+      'thử nút đầu tiên, KHÔNG chắc đúng reel'
+    );
+  }
+
+  const dropped = targets.length - queue.length;
   console.log(
     '[FB Seeding CS] found', targets.length, 'candidate comment buttons;',
     dropped ? `bỏ ${dropped} nút ngoài màn hình (reel preload);` : '',
-    'trying', onScreen.map((t) => t.label).slice(0, 4).join(' / ') || '(không có nút nào trên màn hình)'
+    'trying', queue.map((t) => t.label).slice(0, 4).join(' / ') || '(không có nút nào)'
   );
 
-  for (const { el, label } of onScreen) {
+  for (const { el, label } of queue) {
     // React handlers might sit on the element itself, its parent, or even
     // higher — dispatch full mouse sequence on the element and its ancestors.
     let node = el;
@@ -732,6 +778,8 @@ async function openCommentPanel() {
       await sleep(500);
       if (isPanelOpen()) {
         console.log('[FB Seeding CS] panel opened after', (wait + 1) * 500, 'ms via', label);
+        diag.openedVia = label;
+        diag.openedAfterMs = (wait + 1) * 500;
         return true;
       }
     }
