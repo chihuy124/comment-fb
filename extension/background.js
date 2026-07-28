@@ -349,7 +349,10 @@ function logZeroCommentDiag(url, diag) {
     diag.elapsedMs ? `mất ${Math.round(diag.elapsedMs / 1000)}s/${Math.round((diag.budgetMs || 0) / 1000)}s` : null,
     diag.hitBudget ? 'HẾT-NGÂN-SÁCH-THỜI-GIAN' : null,
     diag.scopedToPanel === false ? 'không-tìm-được-panel-container' : null,
-    diag.sortedByAll === false ? 'không-đổi-được-sang-Tất-cả-bình-luận' : null,
+    // Reel không có bình luận thì cũng không có dropdown sắp xếp — báo "không đổi
+    // được sang Tất cả bình luận" ở đó chỉ là tiếng ồn gây hiểu lầm.
+    (diag.sortedByAll === false && diag.loadedNodes > 0)
+      ? 'không-đổi-được-sang-Tất-cả-bình-luận' : null,
     diag.driftedTo ? `URL nhảy sang ${diag.driftedTo}` : null,
   ].filter(Boolean);
   console.warn(`[BG][hunt]    ↳ 0 comments trên ${url}: ${bits.join(' | ')}`);

@@ -723,8 +723,24 @@ function humanClick(el) {
 const COMMENT_NODE_SEL =
   '[aria-label^="Bình luận dưới tên"], [aria-label^="Bình luận của"], [aria-label^="Comment by"]';
 
+// Ô SOẠN bình luận cũng mang aria-label kiểu "Bình luận dưới tên <trang của
+// bạn>" — y hệt một bình luận thật. Trên reel không có bình luận nào, nó là node
+// duy nhất khớp selector, nên số đếm ra 1 và diag báo "có node bình luận nhưng
+// bóc ra rỗng" — nghe như lỗi bóc text, trong khi sự thật là reel im lặng.
+// Phân biệt bằng contenteditable: chỉ ô soạn thảo mới có.
+function isComposerNode(el) {
+  return !!(
+    el.querySelector('[contenteditable="true"]') ||
+    (el.closest && el.closest('[contenteditable="true"]'))
+  );
+}
+
 function countCommentNodes(scope) {
-  return (scope || document).querySelectorAll(COMMENT_NODE_SEL).length;
+  let n = 0;
+  (scope || document).querySelectorAll(COMMENT_NODE_SEL).forEach((el) => {
+    if (!isComposerNode(el)) n++;
+  });
+  return n;
 }
 
 async function openCommentPanel(diag = {}) {
@@ -966,6 +982,7 @@ function collectCommentText(root) {
     const label = el.getAttribute('aria-label') || '';
     const m = label.match(COMMENT_LABEL_RE);
     if (!m) return;
+    if (isComposerNode(el)) return; // ô soạn thảo, không phải bình luận
     const author = (m[1] || m[2] || '').trim();
     if (!author) return;
     const text = extractCommentText(el);

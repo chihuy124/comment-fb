@@ -155,7 +155,7 @@ function buildVideosUi() {
 
 // Panel đóng. Hai nút comment trên trang (reel hiện tại + reel preload kế bên).
 function buildReelUi(opts = {}) {
-  const { panelOpens = true, zeroRects = false, served = 22 } = opts;
+  const { panelOpens = true, zeroRects = false, served = 22, composerOnly = false } = opts;
   const SERVED = served;
   const url = 'https://www.facebook.com/reel/2504266503383241';
 
@@ -246,7 +246,16 @@ function buildReelUi(opts = {}) {
       });
     });
 
-    render(6); // trạng thái ban đầu: 6/22
+    // Ô SOẠN bình luận: aria-label y hệt một bình luận thật, nhưng có
+    // contenteditable. Trên reel không có bình luận nào, đây là node duy nhất
+    // khớp selector — dump thật từ Chrome: "Bình luận dưới tên Phim hay review ".
+    const composer = doc.createElement('div');
+    composer.setAttribute('aria-label', 'Bình luận dưới tên Phim hay review ');
+    composer.innerHTML = '<div contenteditable="true" aria-label="Viết bình luận"></div>';
+    panel.appendChild(composer);
+    rectAll(composer);
+
+    if (!composerOnly) render(6); // trạng thái ban đầu: 6/22
   };
 
   if (panelOpens) {
@@ -353,6 +362,20 @@ async function run(label, fx, asserts, scrapeOpts) {
       check('đọc được bình luận', comments.length === st.served, `đọc được ${comments.length}`);
       check('diag đánh dấu không xác minh được đúng reel',
         diag.identityUnverified === true, JSON.stringify(diag));
+    });
+
+  // Log thật: 3 reel về 0 với lý do "có-node-bình-luận-nhưng-bóc-ra-rỗng | node
+  // trong DOM=1". Kiểm tra reel 1139874939214394 trên Chrome: node duy nhất đó là
+  // Ô SOẠN bình luận (aria-label "Bình luận dưới tên Phim hay review", có
+  // contenteditable, không có chữ). Reel thật sự không có bình luận nào — trả 0 là
+  // đúng, chỉ lý do ghi sai thành như thể lỗi bóc text.
+  await run('Reel không có bình luận nào, chỉ có ô soạn thảo',
+    buildReelUi({ composerOnly: true }), (comments, st, api, diag) => {
+      check('trả rỗng', comments.length === 0, JSON.stringify(comments));
+      check('KHÔNG đếm ô soạn thảo là bình luận', diag.loadedNodes === 0,
+        `đếm ra ${diag.loadedNodes}`);
+      check('lý do nói đúng là reel im lặng, không phải lỗi bóc text',
+        diag.why === 'panel-mở-nhưng-không-có-bình-luận-nào', diag.why);
     });
 
   // Reel 946844311522548 có 539 bình luận. Đo thật trên Chrome: vòng nạp chạy
