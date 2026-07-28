@@ -312,8 +312,10 @@ async function huntReels(opts, appTabId) {
   let tabId;
   try {
     const tab = await chrome.tabs.create({ url: 'about:blank', active: false });
-    tabId = tabId;
+    tabId = tab.id;
+    console.log('[BG][hunt] tab id=', tabId);
   } catch (e) {
+    console.error('[BG][hunt] tab create failed:', e);
     return { ok: false, error: 'tab_create_failed', reels: [] };
   }
   ensureKeepAlive();
@@ -425,11 +427,12 @@ async function huntReels(opts, appTabId) {
         pushFrontier(harvest.urls);
         const added = frontier.length - sizeBefore;
 
-        // Only a source that stayed stuck through its reloads counts against us
+        // Only a source that stayed stuck through the whole ladder counts against us
         dryRounds = harvest.stuck ? dryRounds + 1 : 0;
         console.log(
           `[BG][hunt] +${added} new urls (saw ${harvest.urls.length}), frontier=${frontier.length}` +
-          `${reloads ? `, ${reloads} reload(s)` : ''}${harvest.stuck ? ' [stuck]' : ''} dryRounds=${dryRounds}`
+          `${recovery ? `, ${recovery} recovery attempt(s)` : ''}` +
+          `${harvest.stuck ? ' [stuck]' : ''} dryRounds=${dryRounds}`
         );
         if (frontier.length === 0) continue; // try the next source
       }
