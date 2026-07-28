@@ -113,8 +113,10 @@ async function harvestMode(durationMs, excludeList, want) {
 
   while (Date.now() < endTime && newCount() < target) {
     const beforeTotal = found.size;
-    scrollFeed();
-    await sleep(1500);
+    await scrollFeed();
+    // advanceOneReel already waits for the reel to change, so grid feeds need
+    // the settle time more than the reel viewer does
+    await sleep(isVerticalReelViewer() ? 600 : 1500);
     sweepReelUrls().forEach((u) => found.add(u));
 
     const scroller = findFeedScroller();
@@ -171,38 +173,93 @@ function findFeedScroller() {
   return best;
 }
 
-function scrollFeed() {
-  // Drive every plausible scroller: the window, the tallest inner scroll
-  // container, and document.scrollingElement.
-  const step = Math.max(600, window.innerHeight * 0.85);
-  try { window.scrollBy(0, step); } catch (_) {}
+// The vertical reel viewer is one-reel-per-URL with scroll snapping; grid feeds
+// (/watch/, search results) are continuous lists. They need different handling.
+function isVerticalReelViewer() {
+  return /^\/reels?\/\d+/.test(location.pathname);
+}
 
+async function scrollFeed() {
+  if (isVerticalReelViewer()) {
+    // Exactly one reel per step. Firing several advance mechanisms at once made
+    // the feed jump two reels and silently skip the one in between.
+    await advanceOneReel();
+    return;
+  }
+
+  // Grid feed: extra scrolling is harmless here, it just goes further down.
+  const step = Math.max(600, window.innerHeight * 0.85);
   const scroller = findFeedScroller();
   if (scroller) {
     try { scroller.scrollTop = scroller.scrollTop + step; } catch (_) {}
+  } else {
+    try { window.scrollBy(0, step); } catch (_) {}
+    const se = document.scrollingElement;
+    if (se) {
+      try { se.scrollTop = se.scrollTop + step; } catch (_) {}
+    }
   }
-  const se = document.scrollingElement;
-  if (se) {
-    try { se.scrollTop = se.scrollTop + step; } catch (_) {}
-  }
-
-  // Vertical reel viewer responds to ArrowDown / the next-reel control
-  nudgeNextReel();
 }
 
-function nudgeNextReel() {
+// Advances by a single reel. Tries one mechanism at a time and waits to see the
+// URL actually change before moving on to the next, so whichever one Facebook
+// currently honours is used alone rather than all of them together.
+async function advanceOneReel() {
+  const before = location.href;
+  const mechanisms = [
+    ['next-button', clickNextReelControl],
+    ['arrow-down', pressArrowDown],
+    ['scroll', scrollOneViewport],
+  ];
+
+  for (const [name, fire] of mechanisms) {
+    let fired = false;
+    try { fired = fire(); } catch (_) {}
+    if (fired === false) continue;
+
+    for (let i = 0; i < 6; i++) {
+      await sleep(250);
+      if (location.href !== before) {
+        if (name !== lastWorkingAdvance) {
+          lastWorkingAdvance = name;
+          console.log('[FB Seeding CS] advancing reels via', name);
+        }
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+let lastWorkingAdvance = null;
+
+function clickNextReelControl() {
   const labels = ['next reel', 'reel tiếp theo', 'next video', 'video tiếp theo', 'reel kế tiếp'];
   for (const el of document.querySelectorAll('[aria-label]')) {
     const l = (el.getAttribute('aria-label') || '').toLowerCase();
     if (labels.includes(l)) {
-      try { el.click(); return; } catch (_) {}
+      el.click();
+      return true;
     }
   }
+  return false; // control not present, let the caller try the next mechanism
+}
+
+function pressArrowDown() {
   const opts = { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, which: 40, bubbles: true, cancelable: true };
-  try {
-    (document.activeElement || document.body).dispatchEvent(new KeyboardEvent('keydown', opts));
-    window.dispatchEvent(new KeyboardEvent('keydown', opts));
-  } catch (_) {}
+  (document.activeElement || document.body).dispatchEvent(new KeyboardEvent('keydown', opts));
+  window.dispatchEvent(new KeyboardEvent('keydown', opts));
+  return true;
+}
+
+function scrollOneViewport() {
+  const scroller = findFeedScroller();
+  if (scroller) {
+    scroller.scrollTop = scroller.scrollTop + scroller.clientHeight;
+  } else {
+    window.scrollBy(0, window.innerHeight);
+  }
+  return true;
 }
 
 function sweepReelUrls() {
