@@ -1126,9 +1126,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Reels đã gom vẫn còn nguyên, vì mỗi cái được ghi ra ngay khi tìm được.
                 renderHuntProgress(
                     `<span style="color:var(--accent-red);">Chrome đã tắt extension giữa chừng sau ${checked} Reels.</span>` +
-                    ` Giữ lại được <strong>${huntedItems.length}</strong> Reels đạt chuẩn — bấm "Bắt Đầu Săn" để chạy tiếp.`
+                    ` Cứu được <strong>${huntedItems.length}</strong> Reels đạt chuẩn ở dưới —` +
+                    ` bấm "Đẩy Tất Cả Vào Bảng Seeding" để giữ trước, vì bấm "Bắt Đầu Săn" sẽ xoá danh sách này.`
                 );
-                showToast(`Chrome tắt extension giữa chừng. Đã giữ ${huntedItems.length} Reels đã gom.`, 'warning');
+                showToast(`Chrome tắt extension giữa chừng. Cứu được ${huntedItems.length} Reels — đẩy vào Bảng Seeding trước khi chạy lại.`, 'warning');
                 return;
             }
 
@@ -1138,7 +1139,9 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (err) {
             console.error(err);
             // Kể cả khi hỏng, những gì đã gom được vẫn nằm trong huntedItems.
-            const kept = huntedItems.length ? ` Vẫn giữ ${huntedItems.length} Reels đã gom.` : '';
+            const kept = huntedItems.length
+                ? ` Vẫn cứu được ${huntedItems.length} Reels ở dưới — đẩy vào Bảng Seeding trước khi chạy lại.`
+                : '';
             renderHuntProgress(`<span style="color:var(--accent-red);">Lỗi: ${escapeHtml(err.message)}</span>${escapeHtml(kept)}`);
             showToast(`Săn Reels lỗi: ${err.message}`, 'warning');
         } finally {
