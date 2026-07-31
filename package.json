@@ -3,7 +3,7 @@
   "private": true,
   "description": "FB Seeding Assistant — trang tĩnh + Chrome extension. package.json chỉ phục vụ test.",
   "scripts": {
-    "test": "node test/hunt-smoke.js && node test/hunt-stuck.js && node test/hunt-no-progress.js && node test/hunt-window.js && node test/harvest-salvage.js && node test/zero-comment-diag.js && node test/scrape-deadline.js && node test/scrape-comments.js && node test/post-comment.js"
+    "test": "node test/hunt-smoke.js && node test/hunt-stuck.js && node test/hunt-no-progress.js && node test/hunt-window.js && node test/hunt-resilience.js && node test/harvest-salvage.js && node test/zero-comment-diag.js && node test/scrape-deadline.js && node test/scrape-comments.js && node test/post-comment.js"
   },
   "devDependencies": {
     "jsdom": "^29.1.1"

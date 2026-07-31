@@ -27,7 +27,8 @@ const SCENARIOS = {
 };
 
 const chrome = {
-  storage: { local: { get: async () => ({}) } },
+  storage: { local: { get: async () => ({}), set: async () => {} } },
+  alarms: { create: () => {}, clear: async () => {}, onAlarm: { addListener: () => {} } },
   runtime: {
     onMessage: { addListener: (fn) => { listener = fn; } },
     getPlatformInfo: () => {},

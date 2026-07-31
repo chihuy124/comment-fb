@@ -5,7 +5,8 @@ const created = [], removed = [], logs = [];
 let harvestCall = 0;
 
 const chrome = {
-  storage: { local: { get: async () => ({}) } },
+  storage: { local: { get: async () => ({}), set: async () => {} } },
+  alarms: { create: () => {}, clear: async () => {}, onAlarm: { addListener: () => {} } },
   runtime: { onMessage:{addListener:(f)=>listener=f}, getPlatformInfo:()=>{}, getManifest:()=>({version:'t'}), sendMessage: async()=>({}) },
   scripting: { executeScript: async()=>{} },
   tabs: {

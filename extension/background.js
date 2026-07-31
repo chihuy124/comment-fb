@@ -27,7 +27,7 @@ let keepAliveTimer = null;
 function ensureKeepAlive() {
   if (keepAliveTimer) return;
   keepAliveTimer = setInterval(() => {
-    if (missions.size === 0 && pendingScrapes.size === 0 && pendingHarvests.size === 0 && pendingComments.size === 0) {
+    if (!huntLoopAlive && missions.size === 0 && pendingScrapes.size === 0 && pendingHarvests.size === 0 && pendingComments.size === 0) {
       clearInterval(keepAliveTimer);
       keepAliveTimer = null;
       return;
@@ -149,7 +149,29 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   // Web app starts / stops a hunt
   if (msg?.type === 'HUNT_REELS') {
-    huntReels(msg.opts || {}, sender.tab?.id).then(sendResponse);
+    // Trả lời NGAY rồi mới chạy. Giữ kênh sendResponse mở suốt cả cuộc săn là
+    // lý do MV3 giết worker xong trang nhận "message channel closed" và mất
+    // sạch kết quả. Kết quả giờ đi đường khác: storage + HUNT_STATUS.
+    if (huntLoopAlive) {
+      sendResponse({ ok: false, error: 'already_running' });
+      return false;
+    }
+    // huntReels đặt huntLoopAlive=true đồng bộ trước await đầu tiên, nên lần
+    // gọi thứ hai ngay sau đây đã thấy 'already_running'.
+    huntReels(msg.opts || {}, sender.tab?.id).catch((e) => {
+      console.error('[BG][hunt] vòng săn ném lỗi ra ngoài:', e);
+    });
+    sendResponse({ ok: true, started: true });
+    return false;
+  }
+  if (msg?.type === 'HUNT_STATUS') {
+    readHuntStateForPage().then((state) => sendResponse({
+      ok: true,
+      state: state || null,
+      // state.running đến từ storage nên vẫn là true sau khi worker chết;
+      // cái này thì không — nó nói về worker đang trả lời câu hỏi này.
+      loopAlive: huntLoopAlive,
+    }));
     return true;
   }
   if (msg?.type === 'HUNT_ABORT') {
@@ -282,6 +304,72 @@ function extractReelIdBg(href) {
 
 let huntAbort = false;
 
+// ---- Trạng thái cuộc săn, ghi ra chrome.storage.local ----
+//
+// Trước đây toàn bộ kết quả sống trong RAM của service worker và chỉ về tới
+// trang qua MỘT sendResponse giữ mở suốt cả cuộc săn — với maxChecks=120 là
+// 30-60 phút. MV3 giết service worker sau 30 giây rảnh; chết một lần là kênh
+// đóng, trang nhận "A listener indicated an asynchronous response... the
+// message channel closed" và MẤT TRẮNG mọi reel đã gom, còn cửa sổ hunt thì bị
+// bỏ rơi vì khối finally không bao giờ chạy.
+//
+// Giờ mỗi reel đạt chuẩn được ghi ra storage NGAY. Worker chết thì mất nhiều
+// nhất một reel, và trang lấy lại phần còn lại bằng HUNT_STATUS.
+const HUNT_STATE_KEY = 'huntState';
+
+// Vòng săn có đang thật sự chạy trong worker NÀY không. Sau khi worker bị giết
+// và khởi động lại, biến này là false trong khi storage vẫn ghi running:true —
+// đúng dấu hiệu để kết luận worker đã chết giữa chừng, không cần đoán theo
+// mốc thời gian (một vòng harvest có thể im lặng tới vài phút mà vẫn khoẻ).
+let huntLoopAlive = false;
+let huntState = null;
+
+async function loadHuntState() {
+  try {
+    const s = await chrome.storage.local.get([HUNT_STATE_KEY]);
+    return s[HUNT_STATE_KEY] || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function saveHuntState(patch) {
+  const base = huntState || (await loadHuntState()) || {};
+  huntState = { ...base, ...patch, heartbeatAt: Date.now() };
+  try {
+    await chrome.storage.local.set({ [HUNT_STATE_KEY]: huntState });
+  } catch (e) {
+    console.warn('[BG][hunt] không ghi được trạng thái:', e);
+  }
+  return huntState;
+}
+
+// Trạng thái để trả về cho trang, đã đối chiếu với thực tế của worker này.
+async function readHuntStateForPage() {
+  const s = await loadHuntState();
+  if (!s || !s.running || huntLoopAlive) return s;
+  // Storage ghi 'đang chạy' nhưng worker này không có vòng săn nào → worker
+  // trước đã bị giết. Chốt sổ ngay để trang lấy được chỗ đã gom thay vì chờ mãi.
+  huntState = s;
+  console.warn(
+    '[BG][hunt] service worker đã khởi động lại giữa cuộc săn — giữ lại',
+    (s.qualified || []).length, 'reel đã gom'
+  );
+  return saveHuntState({ running: false, stopReason: 'worker_restarted' });
+}
+
+// chrome.alarms ĐÁNH THỨC service worker dậy, khác hẳn setInterval vốn chết
+// cùng worker. Mục đích không phải giữ worker sống bằng mọi giá — mà là để khi
+// nó chết, có người phát hiện ra và chốt sổ, kể cả lúc trang không hỏi han gì.
+const HUNT_ALARM = 'fb-seeding-hunt-watch';
+
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name !== HUNT_ALARM) return;
+  if (huntLoopAlive) return; // vòng săn vẫn chạy — alarm chỉ để giữ worker thức
+  await readHuntStateForPage();
+  try { await chrome.alarms.clear(HUNT_ALARM); } catch (e) {}
+});
+
 function normalizeVi(str) {
   return (str || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
 }
@@ -369,6 +457,7 @@ async function huntReels(opts, appTabId) {
   } = opts || {};
 
   huntAbort = false;
+  huntLoopAlive = true;
   const visited = new Set((excludeUrls || []).map((u) => canonicalReelUrl(u) || u));
   const qualified = [];
   const frontier = [];
@@ -392,6 +481,31 @@ async function huntReels(opts, appTabId) {
     }).catch(() => {});
   };
 
+  // Ghi ngay từ đầu để trang có cái mà hỏi, kể cả khi mở cửa sổ thất bại ngay
+  // ở dòng dưới đây.
+  await saveHuntState({
+    running: true, startedAt: Date.now(),
+    targetCount, maxChecks, checked: 0, qualified: [],
+    stopReason: null, error: null,
+  });
+  // 0.5 phút là chu kỳ nhỏ nhất Chrome cho phép.
+  try { chrome.alarms.create(HUNT_ALARM, { periodInMinutes: 0.5 }); } catch (e) {}
+
+  // Chốt sổ. Dù kết thúc bình thường, bị dừng, hay ném lỗi, trạng thái cuối
+  // cùng phải nằm trong storage — đó là thứ duy nhất sống sót qua cái chết của
+  // service worker.
+  const finish = async (stopReason, error) => {
+    huntLoopAlive = false;
+    try { await chrome.alarms.clear(HUNT_ALARM); } catch (e) {}
+    await saveHuntState({
+      running: false, checked, qualified,
+      stopReason, error: error || null, finishedAt: Date.now(),
+    });
+    report({ phase: 'done', stopReason });
+    console.log(`[BG][hunt] done: ${qualified.length}/${targetCount} qualified after ${checked} checks (${stopReason})`);
+    return { ok: !error, reels: qualified, checked, stopReason, error: error || undefined };
+  };
+
   // Mutable: the escalation ladder below may replace the tab entirely, which
   // changes its id, and every later call has to follow the new one.
   let tabId;
@@ -402,7 +516,7 @@ async function huntReels(opts, appTabId) {
     console.log('[BG][hunt] tab id=', tabId, 'trong cửa sổ riêng', huntWindowId);
   } catch (e) {
     console.error('[BG][hunt] tab create failed:', e);
-    return { ok: false, error: 'tab_create_failed', reels: [] };
+    return finish('tab_create_failed', String(e && e.message || e));
   }
   ensureKeepAlive();
   const settings = await getSettings();
@@ -435,6 +549,7 @@ async function huntReels(opts, appTabId) {
   const WANT_PER_HARVEST = 15;
   const MAX_RELOADS_PER_SOURCE = 2;
 
+  let fatal = null;
   try {
     while (qualified.length < targetCount && checked < maxChecks && !huntAbort) {
       // The escalation ladder can fail to produce a replacement tab; without one
@@ -535,6 +650,9 @@ async function huntReels(opts, appTabId) {
           `${recovery ? `, ${recovery} recovery attempt(s)` : ''}` +
           `${harvest.stuck ? ' [stuck]' : ''} dryRounds=${dryRounds}`
         );
+        // Nhịp tim: một vòng harvest có thể im lặng vài phút, storage phải biết
+        // là cuộc săn vẫn sống.
+        await saveHuntState({ checked, qualified });
         if (frontier.length === 0) continue; // try the next source
       }
 
@@ -568,6 +686,10 @@ async function huntReels(opts, appTabId) {
         });
       }
 
+      // Ghi ra storage NGAY sau mỗi reel. Đây là điểm mấu chốt: worker chết thì
+      // mất nhiều nhất một reel, không phải cả buổi.
+      await saveHuntState({ checked, qualified });
+
       report({
         phase: 'checked',
         current: target,
@@ -576,6 +698,12 @@ async function huntReels(opts, appTabId) {
         lastPassed: pass,
       });
     }
+  } catch (e) {
+    // Trước đây một lỗi ở đây làm lời hứa bị từ chối, sendResponse không bao
+    // giờ được gọi, và trang cũng nhận đúng câu "message channel closed" —
+    // không phân biệt được với worker chết. Giờ nó thành một stopReason rõ ràng.
+    console.error('[BG][hunt] lỗi giữa chừng:', e);
+    fatal = String(e && e.message || e);
   } finally {
     if (tabId != null) {
       missions.delete(tabId);
@@ -584,12 +712,12 @@ async function huntReels(opts, appTabId) {
     await closeHuntWindow();
   }
 
-  const stopReason = huntAbort ? 'stopped'
+  const stopReason = fatal ? 'error'
+    : huntAbort ? 'stopped'
     : qualified.length >= targetCount ? 'target_reached'
     : checked >= maxChecks ? 'max_checks'
     : 'sources_exhausted';
-  console.log(`[BG][hunt] done: ${qualified.length}/${targetCount} qualified after ${checked} checks (${stopReason})`);
-  return { ok: true, reels: qualified, checked, stopReason };
+  return finish(stopReason, fatal);
 }
 
 function canonicalReelUrl(raw) {

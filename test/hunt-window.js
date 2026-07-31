@@ -19,7 +19,8 @@ function makeBackground(opts = {}) {
   let nextTabId = 300, nextWinId = 7;
 
   const chrome = {
-    storage: { local: { get: async () => ({}) } },
+    storage: { local: { get: async () => ({}), set: async () => {} } },
+    alarms: { create: () => {}, clear: async () => {}, onAlarm: { addListener: () => {} } },
     runtime: {
       onMessage: { addListener: (fn) => { listener = fn; } },
       getPlatformInfo: () => {}, getManifest: () => ({ version: 'test' }),

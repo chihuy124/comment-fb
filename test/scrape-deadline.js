@@ -16,7 +16,8 @@ const code = fs.readFileSync('extension/background.js', 'utf8');
 function makeBackground() {
   let listener = null;
   const chrome = {
-    storage: { local: { get: async () => ({}) } },
+    storage: { local: { get: async () => ({}), set: async () => {} } },
+    alarms: { create: () => {}, clear: async () => {}, onAlarm: { addListener: () => {} } },
     runtime: {
       onMessage: { addListener: (fn) => { listener = fn; } },
       getPlatformInfo: () => {}, getManifest: () => ({ version: 'test' }),

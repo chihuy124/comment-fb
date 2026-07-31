@@ -72,6 +72,26 @@
       return;
     }
 
+    // Trang hỏi trạng thái cuộc săn. Câu hỏi này sống vài mili-giây, khác hẳn
+    // HUNT_REELS ngày trước phải giữ kênh mở suốt cả cuộc săn — và chính vì thế
+    // nó không chết theo service worker: sendMessage đánh thức worker dậy, còn
+    // kết quả thì nằm trong chrome.storage.local chứ không nằm trong RAM.
+    if (msg.type === 'HUNT_STATUS') {
+      try {
+        const response = await chrome.runtime.sendMessage({ type: 'HUNT_STATUS' });
+        window.postMessage(
+          { source: TAG, type: 'HUNT_STATUS_RESULT', requestId: msg.requestId, response },
+          '*'
+        );
+      } catch (err) {
+        window.postMessage(
+          { source: TAG, type: 'HUNT_STATUS_ERROR', requestId: msg.requestId, error: String(err) },
+          '*'
+        );
+      }
+      return;
+    }
+
     if (msg.type === 'HUNT_ABORT') {
       try { await chrome.runtime.sendMessage({ type: 'HUNT_ABORT' }); } catch (_) {}
       return;

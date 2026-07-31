@@ -624,6 +624,43 @@ document.addEventListener('DOMContentLoaded', () => {
         return `req_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
     }
 
+    function sleep(ms) {
+        return new Promise(r => setTimeout(r, ms));
+    }
+
+    // Một vòng hỏi-đáp với extension. Chỉ dùng cho những câu hỏi NGẮN: kênh
+    // chrome.runtime.sendMessage đóng theo service worker, nên bất cứ câu hỏi
+    // nào phải chờ lâu đều sẽ có ngày chết giữa chừng với "the message channel
+    // closed before a response was received".
+    function extRequest(type, payload, doneType, errType, timeoutMs = 15000) {
+        const requestId = scrapeIdFromRequest();
+        return new Promise((resolve, reject) => {
+            const cleanup = () => {
+                clearTimeout(timer);
+                window.removeEventListener('message', listener);
+            };
+            const timer = setTimeout(() => {
+                cleanup();
+                reject(new Error('Extension không trả lời.'));
+            }, timeoutMs);
+            const listener = (e) => {
+                if (e.source !== window) return;
+                const msg = e.data;
+                if (!msg || msg.source !== EXT_TAG || msg.requestId !== requestId) return;
+                if (msg.type === doneType) {
+                    cleanup();
+                    resolve(msg.response);
+                } else if (msg.type === errType) {
+                    cleanup();
+                    reject(new Error(msg.error));
+                }
+            };
+            window.addEventListener('message', listener);
+            // Spread trước, khoá phong bì sau — payload không được đè source/type.
+            window.postMessage({ ...(payload || {}), source: EXT_TAG, type, requestId }, '*');
+        });
+    }
+
     // --- AUTO COMMENT (one click = one comment) ---
     // Nothing is posted without a deliberate click on this button: the click is
     // the authorisation for that one comment. Rate is whatever the user's own
@@ -1028,75 +1065,127 @@ document.addEventListener('DOMContentLoaded', () => {
         setHuntRunning(true);
         renderHuntProgress(`Đang khởi động... Mục tiêu ${targetCount} Reels đạt chuẩn (≥${minIntent} comment hỏi), kiểm tối đa ${maxChecks} Reels.`);
 
-        const requestId = scrapeIdFromRequest();
+        // Dòng chữ chạy trực tiếp. Kênh này đi riêng qua chrome.tabs.sendMessage
+        // nên không dính vào lời hứa nào; mất vài tin nhắn cũng không sao, vì kết
+        // quả thật lấy từ HUNT_STATUS chứ không từ đây.
+        const onProgress = (e) => {
+            if (e.source !== window) return;
+            const msg = e.data;
+            if (!msg || msg.source !== EXT_TAG || msg.type !== 'HUNT_PROGRESS') return;
+            if (msg.phase === 'done') return; // vòng hỏi trạng thái lo phần kết
+            const parts = [
+                `<strong>Đã kiểm ${msg.checked || 0} Reels</strong>`,
+                `<span style="color:#22c55e;">${msg.qualifiedCount || 0}/${targetCount} đạt chuẩn</span>`,
+            ];
+            if (msg.phase === 'replenish') {
+                parts.push(`<span style="color:var(--text-muted);">đang lấy thêm Reels từ ${escapeHtml(String(msg.sourceUrl || '').replace('https://www.facebook.com', ''))}</span>`);
+            } else if (msg.phase === 'reload') {
+                const how = msg.how === 'fresh-tab' ? 'mở tab mới' : 'điều hướng lại';
+                parts.push(`<span style="color:var(--accent-red);">trang bị treo — ${how} (${msg.attempt || 1}/2): ${escapeHtml(String(msg.sourceUrl || '').replace('https://www.facebook.com', ''))}</span>`);
+            } else if (msg.phase === 'checked') {
+                parts.push(`<span style="color:var(--text-muted);">Reel vừa xong: ${msg.lastCommentCount || 0} comment, ${msg.lastIntentCount || 0} khớp ${msg.lastPassed ? '✅' : '✗'}</span>`);
+            } else if (msg.phase === 'checking') {
+                parts.push(`<span style="color:var(--text-muted);">đang đọc comment...</span>`);
+            }
+            renderHuntProgress(parts.join(' · '));
+        };
+        window.addEventListener('message', onProgress);
+
         // There is no time limit any more — maxChecks bounds the run. This is
         // only a watchdog for a silently dead extension, so it has to sit well
         // past the worst case (every reel timing out at ~45s, plus replenishes).
         const watchdogMs = maxChecks * 60000 + 10 * 60000;
-        const done = new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => reject(new Error('hunt_timeout')), watchdogMs);
-            const listener = (e) => {
-                if (e.source !== window) return;
-                const msg = e.data;
-                if (!msg || msg.source !== EXT_TAG) return;
-
-                if (msg.type === 'HUNT_PROGRESS') {
-                    const parts = [
-                        `<strong>Đã kiểm ${msg.checked || 0} Reels</strong>`,
-                        `<span style="color:#22c55e;">${msg.qualifiedCount || 0}/${targetCount} đạt chuẩn</span>`,
-                    ];
-                    if (msg.phase === 'replenish') {
-                        parts.push(`<span style="color:var(--text-muted);">đang lấy thêm Reels từ ${escapeHtml(String(msg.sourceUrl || '').replace('https://www.facebook.com', ''))}</span>`);
-                    } else if (msg.phase === 'reload') {
-                        const how = msg.how === 'fresh-tab' ? 'mở tab mới' : 'điều hướng lại';
-                        parts.push(`<span style="color:var(--accent-red);">trang bị treo — ${how} (${msg.attempt || 1}/2): ${escapeHtml(String(msg.sourceUrl || '').replace('https://www.facebook.com', ''))}</span>`);
-                    } else if (msg.phase === 'checked') {
-                        parts.push(`<span style="color:var(--text-muted);">Reel vừa xong: ${msg.lastCommentCount || 0} comment, ${msg.lastIntentCount || 0} khớp ${msg.lastPassed ? '✅' : '✗'}</span>`);
-                    } else if (msg.phase === 'checking') {
-                        parts.push(`<span style="color:var(--text-muted);">đang đọc comment...</span>`);
-                    }
-                    renderHuntProgress(parts.join(' · '));
-                    return;
-                }
-
-                if (msg.requestId !== requestId) return;
-                if (msg.type === 'HUNT_DONE') {
-                    clearTimeout(timeout);
-                    window.removeEventListener('message', listener);
-                    resolve(msg.response);
-                } else if (msg.type === 'HUNT_ERROR') {
-                    clearTimeout(timeout);
-                    window.removeEventListener('message', listener);
-                    reject(new Error(msg.error));
-                }
-            };
-            window.addEventListener('message', listener);
-        });
-
-        window.postMessage({
-            source: EXT_TAG, type: 'HUNT_REELS', requestId,
-            opts: { targetCount, minIntent, intentKeywords, searchKeywords, maxChecks, excludeUrls },
-        }, '*');
 
         try {
-            const response = await done;
-            huntedItems = (response?.reels || []).filter(r => r && r.url);
+            // Câu hỏi này chỉ sống vài mili-giây — extension trả lời "đã khởi
+            // động" rồi thả tay. Kết quả về đường storage.
+            const started = await extRequest(
+                'HUNT_REELS',
+                { opts: { targetCount, minIntent, intentKeywords, searchKeywords, maxChecks, excludeUrls } },
+                'HUNT_DONE', 'HUNT_ERROR'
+            );
+            if (!started?.ok) {
+                throw new Error(started?.error === 'already_running'
+                    ? 'Extension đang chạy một cuộc săn khác. Bấm "Dừng lại", đợi vài giây rồi thử lại.'
+                    : (started?.error || 'Extension không khởi động được cuộc săn.'));
+            }
+
+            const state = await pollHuntUntilDone(targetCount, watchdogMs);
+            const checked = state.checked || 0;
             const reasons = {
                 target_reached: 'đã gom đủ mục tiêu',
                 max_checks: `đã kiểm hết giới hạn ${maxChecks} Reels`,
                 stopped: 'bạn đã bấm dừng',
                 sources_exhausted: 'các trang nguồn không cuộn thêm được (Facebook có thể đang giới hạn, thử lại sau ít phút)',
+                tab_create_failed: 'không mở được cửa sổ Facebook',
+                error: `extension gặp lỗi: ${state.error || 'không rõ'}`,
             };
-            const why = reasons[response?.stopReason] || response?.stopReason || '';
-            renderHuntProgress(`<strong>Xong:</strong> ${huntedItems.length}/${targetCount} Reels đạt chuẩn sau khi kiểm ${response?.checked || 0} Reels — ${why}.`);
-            showToast(`Săn xong: ${huntedItems.length} Reels đạt chuẩn (kiểm ${response?.checked || 0} bài).`, 'success');
-            renderHuntResults();
+
+            if (state.stopReason === 'worker_restarted') {
+                // Chrome đã giết service worker giữa chừng. Khác với trước: số
+                // Reels đã gom vẫn còn nguyên, vì mỗi cái được ghi ra ngay khi tìm được.
+                renderHuntProgress(
+                    `<span style="color:var(--accent-red);">Chrome đã tắt extension giữa chừng sau ${checked} Reels.</span>` +
+                    ` Giữ lại được <strong>${huntedItems.length}</strong> Reels đạt chuẩn — bấm "Bắt Đầu Săn" để chạy tiếp.`
+                );
+                showToast(`Chrome tắt extension giữa chừng. Đã giữ ${huntedItems.length} Reels đã gom.`, 'warning');
+                return;
+            }
+
+            const why = reasons[state.stopReason] || state.stopReason || '';
+            renderHuntProgress(`<strong>Xong:</strong> ${huntedItems.length}/${targetCount} Reels đạt chuẩn sau khi kiểm ${checked} Reels — ${why}.`);
+            showToast(`Săn xong: ${huntedItems.length} Reels đạt chuẩn (kiểm ${checked} bài).`, 'success');
         } catch (err) {
             console.error(err);
-            renderHuntProgress(`<span style="color:var(--accent-red);">Lỗi: ${escapeHtml(err.message)}</span>`);
+            // Kể cả khi hỏng, những gì đã gom được vẫn nằm trong huntedItems.
+            const kept = huntedItems.length ? ` Vẫn giữ ${huntedItems.length} Reels đã gom.` : '';
+            renderHuntProgress(`<span style="color:var(--accent-red);">Lỗi: ${escapeHtml(err.message)}</span>${escapeHtml(kept)}`);
             showToast(`Săn Reels lỗi: ${err.message}`, 'warning');
         } finally {
+            window.removeEventListener('message', onProgress);
+            renderHuntResults();
             setHuntRunning(false);
+        }
+    }
+
+    // Nguồn sự thật duy nhất cho kết quả là chrome.storage.local bên extension.
+    // Hỏi lại mỗi 4 giây thay vì chờ một câu trả lời dài 40 phút: mất tin nhắn,
+    // F5 trang, hay service worker chết giữa chừng đều không làm mất reel đã gom.
+    async function pollHuntUntilDone(targetCount, watchdogMs) {
+        const POLL_MS = 4000;
+        const deadline = Date.now() + watchdogMs;
+        let failures = 0;
+        let lastCount = -1;
+
+        while (true) {
+            await sleep(POLL_MS);
+
+            let res = null;
+            try {
+                res = await extRequest('HUNT_STATUS', {}, 'HUNT_STATUS_RESULT', 'HUNT_STATUS_ERROR');
+                failures = 0;
+            } catch (e) {
+                // Worker đang ngủ dậy thì một câu hỏi lẻ có thể trượt — chỉ bỏ
+                // cuộc khi trượt liên tiếp.
+                if (++failures >= 5) throw new Error('Extension ngừng trả lời sau 5 lần hỏi liên tiếp.');
+                continue;
+            }
+
+            const state = res?.state;
+            if (!state) {
+                if (++failures >= 5) throw new Error('Extension không còn giữ trạng thái cuộc săn nào.');
+                continue;
+            }
+
+            const reels = (state.qualified || []).filter(r => r && r.url);
+            huntedItems = reels;
+            if (reels.length !== lastCount) {
+                lastCount = reels.length;
+                renderHuntResults();
+            }
+
+            if (!state.running) return state;
+            if (Date.now() > deadline) throw new Error('Quá thời gian chờ cuộc săn.');
         }
     }
 
